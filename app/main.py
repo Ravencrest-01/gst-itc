@@ -2,31 +2,42 @@ import io
 import csv
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+import random
+from datetime import timedelta
+from pydantic import BaseModel, EmailStr
+
 from fastapi import FastAPI, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
+# Core Engine and Dependency Imports
 from app.core.database import engine, get_db, SessionLocal
 from app.core.dependencies import get_current_tenant_context
-from app.modules.m0_schema.models import Base, ReconciliationRun, MatchResult, Workspace, Client
+from app.core.security import hash_password, verify_password, create_access_token
+
+# Schema Imports
+from app.modules.m0_schema.models import Base, ReconciliationRun, MatchResult, Workspace, Client, User, OTPVerification
 from app.modules.m6_orchestrator.service import run_reconciliation
 
-# 1. Automatically construct all tables inside PostgreSQL on application launch
+# ---------------------------------------------------------
+# 1. DATABASE SYSTEM INITIALIZATION & SEEDING
+# ---------------------------------------------------------
+# Automatically construct all tables inside PostgreSQL on application launch
 Base.metadata.create_all(bind=engine)
 
-# 2. Proactive Seeding: Insert the Mock Tenant rows to satisfy Foreign Key constraints
+# Proactive Seeding: Ensure the default tenant context exists to satisfy constraints
 db_seed = SessionLocal()
 try:
     mock_ws_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     mock_cl_id = uuid.UUID("22222222-2222-2222-2222-222222222222")
     
-    # If the mock workspace doesn't exist yet, insert it
+    # Verify or seed global tenant Workspace
     if not db_seed.query(Workspace).filter(Workspace.id == mock_ws_id).first():
         db_seed.add(Workspace(id=mock_ws_id, name="Alpha CA Firm Practice", type="ca_firm"))
         print(" Seeded: Workspace row added to database.")
         
-    # If the mock client doesn't exist yet, insert it
+    # Verify or seed specific corporate operational Client
     if not db_seed.query(Client).filter(Client.id == mock_cl_id).first():
         db_seed.add(Client(
             id=mock_cl_id, 
@@ -44,7 +55,28 @@ except Exception as e:
 finally:
     db_seed.close()
 
-# 3. Initialize the FastAPI container
+# ---------------------------------------------------------
+# 2. PYDANTIC DATA VALIDATION SCHEMAS
+# ---------------------------------------------------------
+class OTPRequest(BaseModel):
+    email: EmailStr
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    workspace_name: str
+    workspace_type: str = "ca_firm"
+    otp: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+    otp: Optional[str] = None
+
+# ---------------------------------------------------------
+# 3. FASTAPI CORE CONTAINER INSTANTIATION
+# ---------------------------------------------------------
 app = FastAPI(
     title="ITC Reconciliation Engine API",
     description="MVP Backend API powered by persistent PostgreSQL storage.",
@@ -55,6 +87,195 @@ app = FastAPI(
 def read_root():
     return {"status": "healthy", "database": "connected_postgres_on_5433"}
 
+# ---------------------------------------------------------
+# 4. IDENTITY & ACCESS MANAGEMENT (IAM) ENDPOINTS
+# ---------------------------------------------------------
+@app.post("/api/v1/auth/request-otp")
+def request_otp(payload: OTPRequest, db: Session = Depends(get_db)):
+    otp_code = str(random.randint(100000, 999999))
+    expires = datetime.utcnow() + timedelta(minutes=10)
+    
+    otp_entry = OTPVerification(
+        email=payload.email,
+        otp_code=otp_code,
+        expires_at=expires
+    )
+    db.add(otp_entry)
+    db.commit()
+    
+    print(f"\n{'='*40}\nMock OTP for {payload.email}: {otp_code}\n{'='*40}\n")
+    return {"status": "success", "message": "OTP sent to email"}
+
+@app.post("/api/v1/auth/register")
+def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
+    # Verify OTP
+    otp_entry = db.query(OTPVerification).filter(
+        OTPVerification.email == user_data.email,
+        OTPVerification.otp_code == user_data.otp,
+        OTPVerification.used == "false",
+        OTPVerification.expires_at > datetime.utcnow()
+    ).first()
+    
+    if not otp_entry:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+        
+    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
+    
+    try:
+        # Create Workspace
+        new_ws = Workspace(name=user_data.workspace_name, type=user_data.workspace_type)
+        db.add(new_ws)
+        db.flush()
+        
+        # Create User
+        new_user = User(
+            email=user_data.email,
+            hashed_password=hash_password(user_data.password[:72]),
+            full_name=user_data.full_name,
+            workspace_id=new_ws.id
+        )
+        db.add(new_user)
+        
+        otp_entry.used = "true"
+        db.commit()
+        
+        # Auto-login
+        token_payload = {
+            "sub": str(new_user.id),
+            "email": new_user.email,
+            "workspace_id": str(new_ws.id),
+        }
+        access_token = create_access_token(data=token_payload)
+        return {"access_token": access_token, "token_type": "bearer", "user": {"name": new_user.full_name, "email": new_user.email}}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Registration failure: {str(e)}")
+
+@app.post("/api/v1/auth/login")
+def login_user(credentials: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == credentials.email).first()
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        
+    if credentials.otp:
+        otp_entry = db.query(OTPVerification).filter(
+            OTPVerification.email == credentials.email,
+            OTPVerification.otp_code == credentials.otp,
+            OTPVerification.used == "false",
+            OTPVerification.expires_at > datetime.utcnow()
+        ).first()
+        if not otp_entry:
+            raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+        otp_entry.used = "true"
+        db.commit()
+    
+    token_payload = {
+        "sub": str(user.id),
+        "email": user.email,
+        "workspace_id": str(user.workspace_id),
+    }
+    access_token = create_access_token(data=token_payload)
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {"name": user.full_name, "email": user.email}
+    }
+
+@app.get("/api/v1/auth/me")
+def get_current_user_profile(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == tenant["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return {"id": str(user.id), "name": user.full_name, "email": user.email, "workspace_id": str(user.workspace_id)}
+
+# ---------------------------------------------------------
+# 5. BUSINESS INTELLIGENCE & DASHBOARD AGGREGATORS
+# ---------------------------------------------------------
+@app.get("/api/v1/dashboard/kpis")
+def get_dashboard_kpis(
+    tenant: dict = Depends(get_current_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """ Computes prioritized analytics blocks for the Precision Ledger overview dashboard. """
+    client_id = tenant["client_id"]
+
+    # Open Active Tasks
+    open_runs_count = db.query(ReconciliationRun).filter(
+        ReconciliationRun.client_id == client_id,
+        ReconciliationRun.status.in_(["pending", "review", "unreviewed"])
+    ).count()
+
+    # Financial Gains Realized
+    itc_recovered = db.query(func.sum(MatchResult.tax_diff)).filter(
+        MatchResult.client_id == client_id,
+        MatchResult.bucket == "Matched"
+    ).scalar() or 0.0
+
+    # Risk Factor Exposure
+    itc_at_risk = db.query(func.sum(MatchResult.tax_diff)).filter(
+        MatchResult.client_id == client_id,
+        MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched", "Probable"])
+    ).scalar() or 0.0
+
+    # Defaulter Tracking Count
+    vendors_flagged = db.query(MatchResult.purchase_invoice_id).filter(
+        MatchResult.client_id == client_id,
+        MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
+    ).distinct().count()
+
+    return {
+        "open_runs": open_runs_count,
+        "itc_recovered": float(itc_recovered),
+        "itc_at_risk": float(itc_at_risk),
+        "vendors_flagged": vendors_flagged
+    }
+
+@app.get("/api/v1/runs/recent")
+def get_recent_runs(
+    limit: int = 5,
+    tenant: dict = Depends(get_current_tenant_context),
+    db: Session = Depends(get_db)
+):
+    """ Extracts structural batch metrics summarizing recent auditing executions. """
+    client_id = tenant["client_id"]
+    
+    recent_runs = db.query(ReconciliationRun).filter(
+        ReconciliationRun.client_id == client_id
+    ).order_by(desc(ReconciliationRun.created_at)).limit(limit).all()
+
+    formatted_runs = []
+    for run in recent_runs:
+        total_invoices = db.query(MatchResult).filter(MatchResult.run_id == run.id).count()
+        matched_invoices = db.query(MatchResult).filter(
+            MatchResult.run_id == run.id, 
+            MatchResult.bucket == "Matched"
+        ).count()
+        
+        match_percentage = int((matched_invoices / total_invoices * 100)) if total_invoices > 0 else 0
+        
+        run_risk = db.query(func.sum(MatchResult.tax_diff)).filter(
+            run.id == MatchResult.run_id,
+            MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
+        ).scalar() or 0.0
+
+        formatted_runs.append({
+            "id": str(run.id),
+            "tax_period": run.tax_period,
+            "status": run.status,
+            "invoices": total_invoices,
+            "matched_percentage": f"{match_percentage}%",
+            "itc_at_risk": float(run_risk),
+            "created_on": run.created_at.strftime("%d %b, %H:%M")
+        })
+
+    return {"runs": formatted_runs}
+
+# ---------------------------------------------------------
+# 6. TRANSACTION PROCESSING & DATA MANIPULATION PIPELINES
+# ---------------------------------------------------------
 @app.post("/api/v1/reconcile")
 async def reconcile_documents(
     purchase_register: UploadFile = File(...),
@@ -62,10 +283,7 @@ async def reconcile_documents(
     tenant: dict = Depends(get_current_tenant_context),
     db: Session = Depends(get_db)
 ):
-    """
-    Persistent M6 Route: Run multi-pass reconciliation and permanently commit 
-    the resulting metrics to PostgreSQL.
-    """
+    """ Ingests binary document streams, calculates matrix variances, and logs transactional runs. """
     if not purchase_register.filename.endswith('.csv') or not gstr_2b.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="Both uploaded files must be standard CSV format.")
 
@@ -73,11 +291,10 @@ async def reconcile_documents(
         pr_contents = await purchase_register.read()
         twob_contents = await gstr_2b.read()
         
-        # Execute our core multi-pass library matching core
         results = run_reconciliation(pr_contents, twob_contents, tenant)
         run_id = results[0]["run_id"] if results else uuid.uuid4()
         
-        # Persist the high-level Job Run context record
+        # Instantiate structural orchestration parent record
         db_run = ReconciliationRun(
             id=run_id,
             workspace_id=tenant["workspace_id"],
@@ -86,9 +303,9 @@ async def reconcile_documents(
             status="completed"
         )
         db.add(db_run)
-        db.flush()
+        db.flush()  # Prevents foreign key parent-child race condition drops
         
-        # Loop and bulk-commit individual MatchResult rows directly to SQL
+        # Append corresponding internal mapping array items
         for record in results:
             db_result = MatchResult(
                 run_id=run_id,
@@ -115,167 +332,171 @@ async def reconcile_documents(
 
 @app.get("/api/v1/runs/{run_id}/results")
 def get_persisted_results(run_id: str, db: Session = Depends(get_db)):
-    """ Direct Verification Route: Pulls saved records straight back out of PostgreSQL. """
-    records = db.query(MatchResult).filter(MatchResult.run_id == run_id).all()
+    """ Direct Validation Route: Pulls matched items straight out of PostgreSQL. """
+    records = db.query(MatchResult).filter(MatchResult.run_id == uuid.UUID(run_id)).all()
     if not records:
         raise HTTPException(status_code=404, detail="No database records found matching this run ID.")
     return {"run_id": run_id, "count": len(records), "database_rows": records}
 
-# =====================================================================
-# MOCK ENDPOINTS (Migrated from frontend hardcoded data)
-# =====================================================================
+    # ---------------------------------------------------------
+# 7. AUDITOR DECISION & STATE MANIPULATION CONTROLLERS
+# ---------------------------------------------------------
+class MatchStatusUpdate(BaseModel):
+    status: str  # Expected: 'confirmed', 'rejected', or 'unreviewed'
+    override_bucket: Optional[str] = None  # e.g., Manually shifting to 'Matched'
 
-MOCK_WORKSPACE = { "name": "Sharma & Associates", "type": "ca_firm" }
-MOCK_CLIENTS = [
-  { "id": "c1", "name": "Acme Corp Pvt Ltd", "gstin": "27AAAAA0000A1Z5", "state": "Maharashtra", "status": "In progress", "invoices": 192, "matched": 88, "risk": 1065400, "deadline": "20 May 2026", "assignee": "Amit Jain" },
-  { "id": "c2", "name": "Beta Textiles Ltd", "gstin": "24BBBBB1111B1Z3", "state": "Gujarat", "status": "Review", "invoices": 452, "matched": 88, "risk": 210400, "deadline": "20 May 2026", "assignee": "Priya Nair" },
-  { "id": "c3", "name": "Gamma Logistics LLP", "gstin": "29GGGGG2222C1Z1", "state": "Karnataka", "status": "Closed", "invoices": 389, "matched": 98, "risk": 12500, "deadline": "—", "assignee": "Rahul Mehta" },
-  { "id": "c4", "name": "Delta Foods Pvt Ltd", "gstin": "07DDDDD3333D1Z9", "state": "Delhi", "status": "Pending", "invoices": 310, "matched": 85, "risk": 117900, "deadline": "20 May 2026", "assignee": "Priya Nair" },
-  { "id": "c5", "name": "Epsilon Pharma Ltd", "gstin": "33EEEEE4444E1Z7", "state": "Tamil Nadu", "status": "Not started", "invoices": 0, "matched": 0, "risk": 0, "deadline": "20 May 2026", "assignee": "Amit Jain" },
-  { "id": "c6", "name": "Zeta Motors Pvt Ltd", "gstin": "06ZZZZZ5555Z1Z2", "state": "Haryana", "status": "Closed", "invoices": 485, "matched": 96, "risk": 0, "deadline": "—", "assignee": "Rahul Mehta" },
-]
-MOCK_INVOICES = [
-  { "id": 1, "gstin": "27AAACR1234F1Z5", "name": "Reliance Industries Ltd.", "inv": "INV/26/00123", "date": "12 Apr 2026", "taxable": 150000, "tax": 27000, "src": "PR", "diff": 0, "bucket": "matched" },
-  { "id": 2, "gstin": "29AAACT1234F1Z5", "name": "Tata Motors Limited", "inv": "TM/26/4452", "date": "15 Apr 2026", "taxable": 820000, "tax": 231000, "src": "2B", "diff": 1500, "bucket": "mismatched" },
-  { "id": 3, "gstin": "29AAACI1234F1Z5", "name": "Infosys Limited", "inv": "INF/04/9921", "date": "05 Apr 2026", "taxable": 450000, "tax": 81000, "src": "PR", "diff": -81000, "bucket": "missing_in_portal" },
-  { "id": 4, "gstin": "27AAACL1234F1Z5", "name": "Larsen & Toubro Ltd.", "inv": "LT/26/8834", "date": "20 Apr 2026", "taxable": 1200000, "tax": 216000, "src": "PR", "diff": 0, "bucket": "matched" },
-  { "id": 5, "gstin": "07AAACW1234F1Z5", "name": "Wipro Enterprises", "inv": "WP-0012/26", "date": "22 Apr 2026", "taxable": 55000, "tax": 9900, "src": "2B", "diff": 0, "bucket": "missing_in_books" },
-  { "id": 6, "gstin": "33AAACB1234F1Z5", "name": "Bharti Airtel Ltd.", "inv": "AB/44/001", "date": "02 Apr 2026", "taxable": 25000, "tax": 4500, "src": "PR", "diff": 1, "bucket": "probable" },
-  { "id": 7, "gstin": "08AAACH1234F1Z5", "name": "HDFC Bank Ltd.", "inv": "HDFC/CHG/99", "date": "30 Apr 2026", "taxable": 12500, "tax": 2250, "src": "2B", "diff": 0, "bucket": "matched" },
-  { "id": 8, "gstin": "27AAACM1234F1Z5", "name": "Mahindra & Mahindra", "inv": "MM/SP/261", "date": "18 Apr 2026", "taxable": 400000, "tax": 112000, "src": "PR", "diff": -112000, "bucket": "missing_in_portal" },
-  { "id": 9, "gstin": "06AAACS1234F1Z5", "name": "Maruti Suzuki India", "inv": "MSI-8812", "date": "10 Apr 2026", "taxable": 180000, "tax": 50400, "src": "PR", "diff": -2000, "bucket": "mismatched" },
-  { "id": 10, "gstin": "27AAACT1234F1Z5", "name": "TCS Limited", "inv": "TCS/IT/26-1", "date": "28 Apr 2026", "taxable": 500000, "tax": 90000, "src": "PR", "diff": 0, "bucket": "matched" },
-  { "id": 11, "gstin": "24AAACD1234F1Z5", "name": "Adani Power Ltd.", "inv": "AP/26/552", "date": "08 Apr 2026", "taxable": 96000, "tax": 17280, "src": "2B", "diff": 0, "bucket": "missing_in_books" },
-  { "id": 12, "gstin": "27AAACZ1234F1Z5", "name": "Zomato Hyperpure", "inv": "ZHP/2627/77", "date": "25 Apr 2026", "taxable": 64000, "tax": 11520, "src": "PR", "diff": 0, "bucket": "probable" },
-]
-MOCK_SUMMARY = [
-  { "key": "matched", "label": "Matched", "value": 4520500, "count": 142 },
-  { "key": "mismatched", "label": "Mismatched", "value": 215400, "count": 18 },
-  { "key": "missing_in_portal", "label": "Missing in Portal", "value": 850000, "count": 24 },
-  { "key": "missing_in_books", "label": "Missing in Books", "value": 112000, "count": 5 },
-  { "key": "probable", "label": "Probable", "value": 45000, "count": 3 },
-]
-MOCK_ITC_AT_RISK = 1065400
-MOCK_CLIENT_RUNS = [
-  { "period": "Apr 2026", "status": "In progress", "invoices": 192, "matched": 88, "risk": 1065400, "created": "Today, 09:45" },
-  { "period": "Mar 2026", "status": "Closed", "invoices": 388, "matched": 98, "risk": 12500, "created": "05 Apr, 14:15" },
-  { "period": "Feb 2026", "status": "Closed", "invoices": 401, "matched": 99, "risk": 4200, "created": "02 Mar, 09:45" },
-  { "period": "Jan 2026", "status": "Closed", "invoices": 377, "matched": 100, "risk": 0, "created": "04 Feb, 10:10" },
-]
-MOCK_PROBABLE = [
-  { "id": "p1", "name": "Acme Corp India Pvt Ltd", "gstin": "27AAACP1234A1Z5", "date": "15-Apr-2026", "taxable": 125000, "tax": 22500, "conf": 86, "prInv": "INV/26-27/042", "twoInv": "26-27-42" },
-  { "id": "p2", "name": "Global Tech Solutions", "gstin": "29AAGTS5678B1Z2", "date": "11-Apr-2026", "taxable": 45000, "tax": 8100, "conf": 82, "prInv": "GT-2026-009", "twoInv": "GT/2026/009" },
-  { "id": "p3", "name": "Zenith Logistics", "gstin": "24ZENLO9012C1Z9", "date": "19-Apr-2026", "taxable": 12500, "tax": 2250, "conf": 79, "prInv": "ZL/992/26", "twoInv": "ZL-992-26" },
-  { "id": "p4", "name": "Apex Manufacturing", "gstin": "07APEXM3456D1Z4", "date": "03-Apr-2026", "taxable": 890000, "tax": 160200, "conf": 75, "prInv": "APX-04-12", "twoInv": "APX/04/12" },
-  { "id": "p5", "name": "Nova Services LLP", "gstin": "33NOVAS7890E1Z1", "date": "27-Apr-2026", "taxable": 5000, "tax": 900, "conf": 71, "prInv": "INV-991", "twoInv": "991" },
-]
+@app.patch("/api/v1/reconcile/matches/{match_id}")
+def update_match_decision(
+    match_id: str, 
+    payload: MatchStatusUpdate, 
+    db: Session = Depends(get_db)
+):
+    """
+    Auditor Action Path: Allows manual override of 'Probable' or 'Mismatched' 
+    invoices, saving the human-in-the-loop audit status directly to PostgreSQL.
+    """
+    match_record = db.query(MatchResult).filter(MatchResult.id == uuid.UUID(match_id)).first()
+    if not match_record:
+        raise HTTPException(status_code=404, detail="Target match result record not found.")
+    
+    try:
+        match_record.status = payload.status
+        if payload.override_bucket:
+            match_record.bucket = payload.override_bucket
+            
+        db.commit()
+        return {
+            "status": "updated", 
+            "match_id": match_id, 
+            "new_review_status": match_record.status,
+            "current_bucket": match_record.bucket
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to log auditor decision: {str(e)}")
 
-@app.get("/api/v1/workspace")
-def get_workspace():
-    return MOCK_WORKSPACE
+@app.patch("/api/v1/runs/{run_id}/status")
+def update_run_lifecycle(
+    run_id: str, 
+    status: str, 
+    db: Session = Depends(get_db)
+):
+    """ Lifecycle Controller: Moves a run status between 'Pending', 'Review', and 'Closed'. """
+    run_record = db.query(ReconciliationRun).filter(ReconciliationRun.id == uuid.UUID(run_id)).first()
+    if not run_record:
+        raise HTTPException(status_code=404, detail="Target reconciliation run not found.")
+    
+    try:
+        run_record.status = status
+        db.commit()
+        return {"run_id": run_id, "lifecycle_status": run_record.status}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to transition run state: {str(e)}")
+
+# ---------------------------------------------------------
+# 8. CLIENTS MANAGEMENT (COMPANIES)
+# ---------------------------------------------------------
+class ClientCreate(BaseModel):
+    legal_name: str
+    gstin: str
+    state_code: str
 
 @app.get("/api/v1/clients")
-def get_clients():
-    return MOCK_CLIENTS
+def list_clients(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    # Simple MVP: return all clients in workspace
+    clients = db.query(Client).filter(Client.workspace_id == tenant["workspace_id"]).all()
+    return [{"id": str(c.id), "name": c.legal_name, "gstin": c.gstin, "state": c.state_code, "status": "In progress"} for c in clients]
 
+@app.post("/api/v1/clients")
+def add_client(payload: ClientCreate, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    new_client = Client(
+        workspace_id=tenant["workspace_id"],
+        gstin=payload.gstin,
+        legal_name=payload.legal_name,
+        state_code=payload.state_code
+    )
+    db.add(new_client)
+    db.commit()
+    return {"status": "success", "id": str(new_client.id)}
+
+@app.get("/api/v1/clients/{client_id}")
+def get_client(client_id: str, db: Session = Depends(get_db)):
+    c = db.query(Client).filter(Client.id == client_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Client not found")
+    return {"id": str(c.id), "name": c.legal_name, "gstin": c.gstin, "state": c.state_code}
+
+@app.patch("/api/v1/clients/{client_id}")
+def update_client(client_id: str, payload: dict, db: Session = Depends(get_db)):
+    c = db.query(Client).filter(Client.id == client_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if "legal_name" in payload: c.legal_name = payload["legal_name"]
+    if "gstin" in payload: c.gstin = payload["gstin"]
+    if "state_code" in payload: c.state_code = payload["state_code"]
+    db.commit()
+    return {"status": "success"}
+
+@app.delete("/api/v1/clients/{client_id}")
+def delete_client(client_id: str, db: Session = Depends(get_db)):
+    c = db.query(Client).filter(Client.id == client_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Client not found")
+    db.delete(c)
+    db.commit()
+    return {"status": "deleted"}
+
+# ---------------------------------------------------------
+# 9. RECONCILIATION FLOW ENDPOINTS (MISSING PIECES)
+# ---------------------------------------------------------
 @app.get("/api/v1/clients/{client_id}/runs")
-def get_client_runs(client_id: str):
-    return MOCK_CLIENT_RUNS
+def list_client_runs(client_id: str, db: Session = Depends(get_db)):
+    runs = db.query(ReconciliationRun).filter(ReconciliationRun.client_id == client_id).order_by(desc(ReconciliationRun.created_at)).all()
+    return [{"id": str(r.id), "period": r.tax_period, "status": r.status, "created": r.created_at.strftime("%d %b, %H:%M")} for r in runs]
 
-@app.get("/api/v1/runs/mock/summary")
-def get_run_summary():
+@app.get("/api/v1/runs/{run_id}/summary")
+def get_run_summary(run_id: str, db: Session = Depends(get_db)):
+    # Mocking for MVP response since engine doesn't currently bucket accurately without PR/2B tables
     return {
-        "summary": MOCK_SUMMARY,
-        "itc_at_risk": MOCK_ITC_AT_RISK,
-        "invoices": MOCK_INVOICES,
-        "probable": MOCK_PROBABLE
+        "summary": [
+            { "key": "matched", "label": "Matched", "value": 4520500, "count": 142 },
+            { "key": "mismatched", "label": "Mismatched", "value": 215400, "count": 18 },
+            { "key": "missing_in_portal", "label": "Missing in Portal", "value": 850000, "count": 24 },
+            { "key": "missing_in_books", "label": "Missing in Books", "value": 112000, "count": 5 },
+            { "key": "probable", "label": "Probable", "value": 45000, "count": 3 },
+        ],
+        "itc_at_risk": 1065400,
     }
 
+@app.get("/api/v1/runs/{run_id}/invoices")
+def get_run_invoices(run_id: str, db: Session = Depends(get_db)):
+    # Requires PurchaseInvoice / PortalInvoice tables to be populated by the engine
+    # Since engine doesn't persist them yet, we return the mock list for MVP front-end compatibility
+    return [
+        { "id": 1, "gstin": "27AAACR1234F1Z5", "name": "Reliance Industries Ltd.", "inv": "INV/26/00123", "date": "12 Apr 2026", "taxable": 150000, "tax": 27000, "src": "PR", "diff": 0, "bucket": "matched" },
+        { "id": 2, "gstin": "29AAACT1234F1Z5", "name": "Tata Motors Limited", "inv": "TM/26/4452", "date": "15 Apr 2026", "taxable": 820000, "tax": 231000, "src": "2B", "diff": 1500, "bucket": "mismatched" }
+    ]
 
+@app.get("/api/v1/runs/{run_id}/probable")
+def get_run_probable(run_id: str, db: Session = Depends(get_db)):
+    return [
+        { "id": "p1", "name": "Acme Corp India Pvt Ltd", "gstin": "27AAACP1234A1Z5", "date": "15-Apr-2026", "taxable": 125000, "tax": 22500, "conf": 86, "prInv": "INV/26-27/042", "twoInv": "26-27-42" },
+    ]
 
+# ---------------------------------------------------------
+# 10. SETTINGS & REPORTS (STUBS)
+# ---------------------------------------------------------
+@app.get("/api/v1/workspace")
+def get_workspace_profile(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    ws = db.query(Workspace).filter(Workspace.id == tenant["workspace_id"]).first()
+    return {"id": str(ws.id), "name": ws.name, "type": ws.type}
 
-@app.get("/api/v1/dashboard/kpis")
-def get_dashboard_kpis(
-    tenant: dict = Depends(get_current_tenant_context),
-    db: Session = Depends(get_db)
-):
-    """
-    Calculates the high-level metrics for the Precision Ledger Dashboard.
-    """
-    client_id = tenant["client_id"]
+@app.get("/api/v1/users")
+def get_workspace_users(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    users = db.query(User).filter(User.workspace_id == tenant["workspace_id"]).all()
+    return [{"id": str(u.id), "name": u.full_name, "email": u.email, "role": "admin"} for u in users]
 
-    # 1. Open Runs (Status is not 'closed' or 'completed')
-    open_runs_count = db.query(ReconciliationRun).filter(
-        ReconciliationRun.client_id == client_id,
-        ReconciliationRun.status.in_(["pending", "review", "unreviewed"])
-    ).count()
-
-    # 2. ITC Recovered (Sum of tax on 'Matched' invoices)
-    itc_recovered = db.query(func.sum(MatchResult.tax_diff)).filter(
-        MatchResult.client_id == client_id,
-        MatchResult.bucket == "Matched"
-    ).scalar() or 0.0
-
-    # 3. ITC at Risk (Sum of tax on 'Missing-in-Portal' or 'Mismatched' invoices)
-    itc_at_risk = db.query(func.sum(MatchResult.tax_diff)).filter(
-        MatchResult.client_id == client_id,
-        MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched", "Probable"])
-    ).scalar() or 0.0
-
-    # 4. Vendors Flagged (Distinct suppliers with discrepancies)
-    # Note: In a full schema, you'd join with the Supplier table. Here we count mismatched rows.
-    vendors_flagged = db.query(MatchResult).filter(
-        MatchResult.client_id == client_id,
-        MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
-    ).count()
-
-    return {
-        "open_runs": open_runs_count,
-        "itc_recovered": float(itc_recovered),
-        "itc_at_risk": float(itc_at_risk),
-        "vendors_flagged": vendors_flagged
-    }
-
-@app.get("/api/v1/runs/recent")
-def get_recent_runs(
-    limit: int = 5,
-    tenant: dict = Depends(get_current_tenant_context),
-    db: Session = Depends(get_db)
-):
-    """
-    Fetches the latest reconciliation runs to populate the dashboard data table.
-    """
-    client_id = tenant["client_id"]
-    
-    # Fetch the runs ordered by newest first
-    recent_runs = db.query(ReconciliationRun).filter(
-        ReconciliationRun.client_id == client_id
-    ).order_by(desc(ReconciliationRun.created_at)).limit(limit).all()
-
-    formatted_runs = []
-    for run in recent_runs:
-        # Calculate row-level stats for each run
-        total_invoices = db.query(MatchResult).filter(MatchResult.run_id == run.id).count()
-        matched_invoices = db.query(MatchResult).filter(
-            MatchResult.run_id == run.id, 
-            MatchResult.bucket == "Matched"
-        ).count()
-        
-        match_percentage = int((matched_invoices / total_invoices * 100)) if total_invoices > 0 else 0
-        
-        run_risk = db.query(func.sum(MatchResult.tax_diff)).filter(
-            MatchResult.run_id == run.id,
-            MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
-        ).scalar() or 0.0
-
-        formatted_runs.append({
-            "id": str(run.id),
-            "tax_period": run.tax_period,
-            "status": run.status,
-            "invoices": total_invoices,
-            "matched_percentage": f"{match_percentage}%",
-            "itc_at_risk": float(run_risk),
-            "created_on": run.created_at.strftime("%d %b, %H:%M")
-        })
-
-    return {"runs": formatted_runs}
+@app.get("/api/v1/runs/{run_id}/reports/{report_type}")
+def download_report(run_id: str, report_type: str):
+    return {"status": "generated", "url": f"https://s3.mock.url/reports/{run_id}_{report_type}.xlsx"}

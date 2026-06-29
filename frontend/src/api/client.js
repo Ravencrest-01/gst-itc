@@ -1,46 +1,175 @@
 // API client for the FastAPI backend.
 // Dev calls go through the Vite proxy (vite.config.js) -> no CORS issues.
-// Set VITE_API_BASE in prod.
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
+function getHeaders() {
+  const token = localStorage.getItem("token");
+  const headers = { "Content-Type": "application/json" };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function handleResponse(res) {
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------
+// AUTHENTICATION & OTP
+// ---------------------------------------------------------
 export async function health() {
   const r = await fetch(`${BASE}/healthz`);
-  if (!r.ok) throw new Error(`health ${r.status}`);
-  return r.json();
+  return handleResponse(r);
 }
 
-// GET /api/v1/runs/{run_id}/results -> { run_id, count, database_rows: [MatchResult...] }
-export async function getResults(runId) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/results`);
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(t || `HTTP ${r.status}`);
-  }
-  const d = await r.json();
-  return Array.isArray(d.database_rows) ? d.database_rows : [];
+export async function requestOtp(email) {
+  const r = await fetch(`${BASE}/api/v1/auth/request-otp`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ email }),
+  });
+  return handleResponse(r);
 }
 
-// Two-step: POST reconcile (returns an object, NOT a list), then GET the saved rows.
-// POST /api/v1/reconcile (multipart) -> { status, run_id, total_records_committed }
+export async function register({ email, password, fullName, workspaceName, otp }) {
+  const r = await fetch(`${BASE}/api/v1/auth/register`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      email,
+      password,
+      full_name: fullName,
+      workspace_name: workspaceName,
+      workspace_type: "ca_firm",
+      otp,
+    }),
+  });
+  return handleResponse(r);
+}
+
+export async function login({ email, password, otp }) {
+  const r = await fetch(`${BASE}/api/v1/auth/login`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ email, password, otp }),
+  });
+  return handleResponse(r);
+}
+
+export async function getCurrentUser() {
+  const r = await fetch(`${BASE}/api/v1/auth/me`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+// ---------------------------------------------------------
+// WORKSPACE & CLIENTS
+// ---------------------------------------------------------
+export async function getWorkspace() {
+  const r = await fetch(`${BASE}/api/v1/workspace`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getClients() {
+  const r = await fetch(`${BASE}/api/v1/clients`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function addClient({ legalName, gstin, stateCode }) {
+  const r = await fetch(`${BASE}/api/v1/clients`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      legal_name: legalName,
+      gstin,
+      state_code: stateCode,
+    }),
+  });
+  return handleResponse(r);
+}
+
+export async function getClientDetails(clientId) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+// ---------------------------------------------------------
+// RECONCILIATION FLOW
+// ---------------------------------------------------------
+export async function getClientRuns(clientId) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/runs`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getRunSummary(runId) {
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/summary`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getRunInvoices(runId) {
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/invoices`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getRunResults(runId) {
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/results`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getRunProbable(runId) {
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/probable`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function submitReviewMatch(runId, matchId, { status, overrideBucket }) {
+  const r = await fetch(`${BASE}/api/v1/reconcile/matches/${matchId}`, {
+    method: "PATCH",
+    headers: getHeaders(),
+    body: JSON.stringify({
+      status,
+      override_bucket: overrideBucket,
+    }),
+  });
+  return handleResponse(r);
+}
+
 export async function reconcile(prFile, twobFile) {
   const fd = new FormData();
   fd.append("purchase_register", prFile);
   fd.append("gstr_2b", twobFile);
-  const r = await fetch(`${BASE}/api/v1/reconcile`, { method: "POST", body: fd });
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(t || `HTTP ${r.status}`);
+  
+  const token = localStorage.getItem("token");
+  const headers = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
-  const summary = await r.json(); // { status, run_id, total_records_committed }
-  const runId = summary.run_id ?? null;
 
-  let rows = [];
-  if (runId) {
-    try {
-      rows = await getResults(runId); // pull the persisted MatchResult rows
-    } catch {
-      /* results fetch is best-effort; we still return the run + total */
-    }
-  }
-  return { runId, rows, total: summary.total_records_committed ?? rows.length };
+  const r = await fetch(`${BASE}/api/v1/reconcile`, {
+    method: "POST",
+    headers,
+    body: fd,
+  });
+  return handleResponse(r);
 }

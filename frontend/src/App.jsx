@@ -9,7 +9,9 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { health, reconcile } from "./api/client";
+import { health, requestOtp, register, login, getCurrentUser, getWorkspace, getClients, addClient, getClientRuns, getRunSummary, getRunInvoices, getRunResults, getRunProbable, submitReviewMatch, reconcile } from "./api/client";
+
+export const AppContext = React.createContext({});
 
 /* Group raw backend match rows (keyed by `bucket`) into our five buckets. */
 function summarize(rows) {
@@ -166,6 +168,8 @@ const NAV = [
 ];
 
 function Sidebar({ page, setPage }) {
+  const { workspace } = React.useContext(AppContext);
+  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
   return (
     <aside style={{ width: 240, background: C.navy, color: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,.12)" }}>
@@ -236,6 +240,8 @@ function ClientSwitcher({ clients, activeId, onPick }) {
 }
 
 function Topbar({ clients, activeId, setActiveId, period, setPeriod, apiOk }) {
+  const { workspace } = React.useContext(AppContext);
+  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
   const dot = apiOk === true ? C.green : apiOk === false ? C.textFaint : C.amber;
   const lbl = apiOk === true ? "API connected" : apiOk === false ? "API offline" : "Checking…";
   return (
@@ -291,6 +297,11 @@ function ClientGate({ client, clients, onPick, children }) {
    PAGE — Practice dashboard (no client selected)
    ============================================================ */
 function PracticeDashboard({ clients, go, openClient }) {
+  const { workspace, clientRuns, summary, itcAtRisk } = React.useContext(AppContext);
+  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
+  const CLIENT_RUNS = clientRuns || [];
+  const SUMMARY = summary || [];
+  const ITC_AT_RISK = itcAtRisk || 0;
   const totalRisk = clients.reduce((a, c) => a + c.risk, 0);
   const due = clients.filter((c) => ["In progress", "Pending", "Review", "Not started"].includes(c.status)).length;
   const flagged = clients.filter((c) => c.risk > 0).length;
@@ -447,6 +458,8 @@ function ClientDashboard({ client, go }) {
    PAGE — Clients portfolio
    ============================================================ */
 function ClientsPage({ clients, openClient }) {
+  const { workspace } = React.useContext(AppContext);
+  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
   const [q, setQ] = useState("");
   const rows = clients.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) || c.gstin.toLowerCase().includes(q.toLowerCase()));
   const th = (t, right) => <th style={{ textAlign: right ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase", color: C.textMute, padding: "10px 14px", whiteSpace: "nowrap" }}>{t}</th>;
@@ -492,6 +505,10 @@ function ClientsPage({ clients, openClient }) {
    PAGE — Reconciliation results (client-scoped)
    ============================================================ */
 function Reconciliation({ client, go, live }) {
+  const { summary, invoices, itcAtRisk } = React.useContext(AppContext);
+  const SUMMARY = summary || [];
+  const INVOICES = invoices || [];
+  const ITC_AT_RISK = itcAtRisk || 0;
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
   // KPI cards: live counts (from a real backend run) override the mock totals.
@@ -644,17 +661,21 @@ function NewRun({ client, go, onReconciled }) {
   const ready = pr && two && !busy;
 
   const onFile = (setter) => (e) => {
-    const f = e.target.files?.[0];
+    e.preventDefault();
+    const f = e.target.files?.[0] || e.dataTransfer?.files?.[0];
     if (f) setter({ file: f, name: f.name, size: humanSize(f.size) });
-    e.target.value = ""; // allow re-selecting the same file
+    if (e.target.value) e.target.value = ""; // allow re-selecting the same file
   };
 
   const start = async () => {
     setErr("");
     setBusy(true);
     try {
-      const { runId, rows, total } = await reconcile(pr.file, two.file);
-      onReconciled({ runId, rows, counts: summarize(rows), total });
+      const res = await reconcile(pr.file, two.file);
+      const runId = res.run_id;
+      const resultsData = await getRunResults(runId);
+      const rows = resultsData.database_rows || [];
+      onReconciled({ runId, rows, counts: summarize(rows), total: res.total_records_committed || rows.length });
     } catch (e) {
       setErr(
         "Could not reach the reconciliation API. Make sure the backend is running on " +
@@ -679,8 +700,11 @@ function NewRun({ client, go, onReconciled }) {
     </div>
   );
 
-  const Dropzone = ({ kind, onPick }) => (
-    <div style={{ border: `1.5px dashed ${C.border}`, borderRadius: 8, padding: "28px 16px", textAlign: "center", background: C.inlay }}>
+  const Dropzone = ({ kind, onPick, onDrop }) => (
+    <div 
+      onDragOver={(e) => e.preventDefault()} 
+      onDrop={onDrop}
+      style={{ border: `1.5px dashed ${C.border}`, borderRadius: 8, padding: "28px 16px", textAlign: "center", background: C.inlay }}>
       <div style={{ width: 44, height: 44, borderRadius: 999, background: "#fff", border: `1px solid ${C.border}`, display: "grid", placeItems: "center", margin: "0 auto 10px" }}><UploadCloud size={20} color={C.textMute} /></div>
       <div style={{ fontSize: 13.5, fontWeight: 600 }}>Choose a CSV file</div>
       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint, margin: "4px 0 12px", textTransform: "uppercase" }}>Supported: CSV</div>
@@ -715,11 +739,11 @@ function NewRun({ client, go, onReconciled }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>Purchase Register</span><Chip label="Required" fg={C.textMute} bg={C.slateBg} dot={false} /></div>
-              {pr ? <FileRow f={pr} onRemove={() => setPr(null)} /> : <Dropzone kind="PR" onPick={() => prRef.current?.click()} />}
+              {pr ? <FileRow f={pr} onRemove={() => setPr(null)} /> : <Dropzone kind="PR" onPick={() => prRef.current?.click()} onDrop={onFile(setPr)} />}
             </div>
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>GSTR-2B</span><Chip label="Required" fg={C.textMute} bg={C.slateBg} dot={false} /></div>
-              {two ? <FileRow f={two} onRemove={() => setTwo(null)} /> : <Dropzone kind="2B" onPick={() => twoRef.current?.click()} />}
+              {two ? <FileRow f={two} onRemove={() => setTwo(null)} /> : <Dropzone kind="2B" onPick={() => twoRef.current?.click()} onDrop={onFile(setTwo)} />}
             </div>
           </div>
           {err && <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: C.redBg, border: `1px solid #F1C9C4`, color: C.red, fontSize: 12.5 }}>{err}</div>}
@@ -737,6 +761,9 @@ function NewRun({ client, go, onReconciled }) {
    PAGE — Review (client-scoped)
    ============================================================ */
 function Review({ client, go }) {
+  const { probable, invoices } = React.useContext(AppContext);
+  const PROBABLE = probable || [];
+  const INVOICES = invoices || [];
   const [idx, setIdx] = useState(0);
   const [reviewed, setReviewed] = useState(12);
   const total = 32;
@@ -978,16 +1005,138 @@ function Notify() {
   </div>;
 }
 
+
+/* ============================================================
+   AUTH: Login & Register screen with OTP
+   ============================================================ */
+function AuthScreen({ onAuthSuccess }) {
+  const [isRegister, setIsRegister] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSendOtp = async (e) => {
+    e.preventDefault();
+    if (!email) return setError("Email is required");
+    setError("");
+    setLoading(true);
+    try {
+      await requestOtp(email);
+      setOtpSent(true);
+    } catch (err) {
+      setError(err.message || "Failed to send OTP");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      let res;
+      if (isRegister) {
+        res = await register({ email, password, fullName, workspaceName, otp });
+      } else {
+        res = await login({ email, password, otp });
+      }
+      localStorage.setItem("token", res.access_token);
+      onAuthSuccess(res.access_token);
+    } catch (err) {
+      setError(err.message || "Authentication failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT }}>
+      <div style={{ width: 400, padding: 32, background: "#fff", borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.08)", border: `1px solid ${C.border}` }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: C.navy, marginBottom: 8, textAlign: "center" }}>
+          {isRegister ? "Create CA Practice Account" : "Log In to Practice Edition"}
+        </h2>
+        <p style={{ fontSize: 13, color: C.textMute, textAlign: "center", marginBottom: 24 }}>
+          {isRegister ? "Set up your firm workspace" : "Access your firm dashboard"}
+        </p>
+
+        {error && <div style={{ padding: "10px 12px", background: C.redBg, color: C.red, borderRadius: 6, fontSize: 13, marginBottom: 16 }}>{error}</div>}
+
+        <form onSubmit={otpSent ? handleSubmit : handleSendOtp}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Email Address</label>
+            <input disabled={otpSent} type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+          </div>
+
+          {!otpSent ? (
+            <button type="submit" disabled={loading} style={{ width: "100%", height: 40, background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer" }}>
+              {loading ? "Sending..." : "Send OTP"}
+            </button>
+          ) : (
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>OTP Code (printed to console)</label>
+                <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Password</label>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+              </div>
+              {isRegister && (
+                <>
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Full Name</label>
+                    <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+                  </div>
+                  <div style={{ marginBottom: 24 }}>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Practice / Workspace Name</label>
+                    <input type="text" value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
+                  </div>
+                </>
+              )}
+              <button type="submit" disabled={loading} style={{ width: "100%", height: 40, background: C.green, color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer" }}>
+                {loading ? "Authenticating..." : isRegister ? "Create Workspace" : "Log In"}
+              </button>
+            </>
+          )}
+        </form>
+
+        <div style={{ marginTop: 20, textAlign: "center" }}>
+          <button onClick={() => { setIsRegister(!isRegister); setOtpSent(false); setError(""); }} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
+            {isRegister ? "Already have an account? Log In" : "Need an account? Register"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    ROOT
    ============================================================ */
 export default function App() {
+  const [token, setToken] = useState(localStorage.getItem("token"));
   const [page, setPage] = useState("dashboard");
   const [activeClientId, setActiveClientId] = useState(null); // null = practice view
   const [period, setPeriod] = useState("FY 2026–27 · Apr 2026");
   const [apiOk, setApiOk] = useState(null); // null = checking, true/false = result
   const [live, setLive] = useState(null);   // last real reconcile result
-  const client = CLIENTS.find((c) => c.id === activeClientId) || null;
+
+  const [data, setData] = useState({
+    workspace: null,
+    clients: [],
+    clientRuns: [],
+    summary: [],
+    invoices: [],
+    probable: [],
+    itcAtRisk: 0
+  });
+
   const go = (p) => setPage(p);
   const openClient = (id) => { setActiveClientId(id); setPage("dashboard"); };
 
@@ -997,9 +1146,54 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
+  const bootstrap = () => {
+    if (!token) return;
+    Promise.all([
+      getWorkspace().catch(() => ({ name: "CA Firm Workspace", type: "ca_firm" })),
+      getClients().catch(() => [])
+    ]).then(([ws, cl]) => {
+      setData(prev => ({ ...prev, workspace: ws, clients: cl }));
+    });
+  };
+
+  useEffect(() => {
+    bootstrap();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (activeClientId) {
+      Promise.all([
+        getClientRuns(activeClientId).catch(() => []),
+        getRunSummary("mock").catch(() => ({ summary: [], itc_at_risk: 0 })),
+        getRunInvoices("mock").catch(() => []),
+        getRunProbable("mock").catch(() => [])
+      ]).then(([runs, sum, inv, prob]) => {
+        setData(prev => ({
+          ...prev,
+          clientRuns: runs,
+          summary: sum.summary || [],
+          invoices: inv || [],
+          probable: prob || [],
+          itcAtRisk: sum.itc_at_risk || 0
+        }));
+      });
+    } else {
+      setData(prev => ({ ...prev, clientRuns: [], summary: [], invoices: [], probable: [], itcAtRisk: 0 }));
+    }
+  }, [activeClientId, token]);
+
   const onReconciled = (result) => { setLive(result); setPage("reconciliation"); };
 
+  if (!token) {
+    return <AuthScreen onAuthSuccess={(t) => setToken(t)} />;
+  }
+
+  const CLIENTS = data.clients || [];
+  const client = CLIENTS.find((c) => c.id === activeClientId) || null;
+
   return (
+    <AppContext.Provider value={data}>
     <div style={{ display: "flex", height: "100vh", fontFamily: FONT, color: C.text, background: C.bg, overflow: "hidden" }}>
       <Sidebar page={page} setPage={setPage} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -1015,5 +1209,6 @@ export default function App() {
         </main>
       </div>
     </div>
+    </AppContext.Provider>
   );
 }

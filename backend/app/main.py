@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.logging import setup_logging
-from app.api import health, auth, runs
+from app.api import health, auth, runs, audit
 
 setup_logging()
 
@@ -24,3 +24,4 @@ app.add_middleware(
 app.include_router(health.router, tags=["Health"])
 app.include_router(auth.router, prefix="/auth", tags=["Auth"])
 app.include_router(runs.router, prefix="/runs", tags=["Reconciliation Runs"])
+app.include_router(audit.router, prefix="/audit", tags=["Audit Log"])

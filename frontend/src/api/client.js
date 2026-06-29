@@ -36,7 +36,7 @@ export async function requestOtp(email) {
   return handleResponse(r);
 }
 
-export async function register({ email, password, fullName, workspaceName, otp }) {
+export async function register({ email, password, fullName, workspaceName, workspaceType, otp }) {
   const r = await fetch(`${BASE}/api/v1/auth/register`, {
     method: "POST",
     headers: getHeaders(),
@@ -45,7 +45,7 @@ export async function register({ email, password, fullName, workspaceName, otp }
       password,
       full_name: fullName,
       workspace_name: workspaceName,
-      workspace_type: "ca_firm",
+      workspace_type: workspaceType || "ca_firm",
       otp,
     }),
   });
@@ -170,6 +170,101 @@ export async function reconcile(prFile, twobFile) {
     method: "POST",
     headers,
     body: fd,
+  });
+  return handleResponse(r);
+}
+
+export async function updateWorkspace({ name, type }) {
+  const r = await fetch(`${BASE}/api/v1/workspace`, {
+    method: "PATCH",
+    headers: getHeaders(),
+    body: JSON.stringify({ name, type }),
+  });
+  return handleResponse(r);
+}
+
+export async function inviteUser({ fullName, email, role }) {
+  const r = await fetch(`${BASE}/api/v1/users`, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify({ fullName, email, role }),
+  });
+  return handleResponse(r);
+}
+
+export async function getWorkspaceSettings() {
+  const r = await fetch(`${BASE}/api/v1/workspace/settings`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function updateWorkspaceSettings({ tax_tolerance, date_window_days, fuzzy_threshold }) {
+  const r = await fetch(`${BASE}/api/v1/workspace/settings`, {
+    method: "PATCH",
+    headers: getHeaders(),
+    body: JSON.stringify({ tax_tolerance, date_window_days, fuzzy_threshold }),
+  });
+  return handleResponse(r);
+}
+
+export async function getClientSettings(clientId) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/settings`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function updateClientSettings(clientId, { tax_tolerance, date_window_days, fuzzy_threshold }) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/settings`, {
+    method: "PATCH",
+    headers: getHeaders(),
+    body: JSON.stringify({ tax_tolerance, date_window_days, fuzzy_threshold }),
+  });
+  return handleResponse(r);
+}
+
+export async function getClientVendors(clientId) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/vendors`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getDashboardKpis() {
+  const r = await fetch(`${BASE}/api/v1/dashboard/kpis`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function updateClient(clientId, { legalName, gstin, stateCode }) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
+    method: "PATCH",
+    headers: getHeaders(),
+    body: JSON.stringify({ legal_name: legalName, gstin, state_code: stateCode }),
+  });
+  return handleResponse(r);
+}
+
+export async function downloadReport(runId, reportType) {
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/reports/${reportType}`, {
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function deleteClient(clientId) {
+  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
+    method: "DELETE",
+    headers: getHeaders(),
+  });
+  return handleResponse(r);
+}
+
+export async function getWorkspaceUsers() {
+  const r = await fetch(`${BASE}/api/v1/users`, {
+    headers: getHeaders(),
   });
   return handleResponse(r);
 }

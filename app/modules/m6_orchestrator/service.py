@@ -9,7 +9,7 @@ def run_reconciliation(
     pr_file_contents: bytes, 
     twob_file_contents: bytes, 
     tenant: dict
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Module M6 Orchestration Seam: Combines Ingestion (M4), Normalization (M1), 
     and Matching (M2) into a single functional unit independent of the HTTP layer.
@@ -44,4 +44,4 @@ def run_reconciliation(
 
     # 3. Execute the Multi-Pass Matching Engine
     match_results = run_matching_passes(normalized_pr, normalized_2b)
-    return match_results
+    return match_results, normalized_pr, normalized_2b

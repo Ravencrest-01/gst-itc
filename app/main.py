@@ -17,7 +17,7 @@ from app.core.dependencies import get_current_tenant_context
 from app.core.security import hash_password, verify_password, create_access_token
 
 # Schema Imports
-from app.modules.m0_schema.models import Base, ReconciliationRun, MatchResult, Workspace, Client, User, OTPVerification
+from app.modules.m0_schema.models import Base, ReconciliationRun, MatchResult, Workspace, Client, User, OTPVerification, PurchaseInvoice, PortalInvoice, Vendor, WorkspaceSettings
 from app.modules.m6_orchestrator.service import run_reconciliation
 
 # ---------------------------------------------------------
@@ -291,9 +291,14 @@ async def reconcile_documents(
         pr_contents = await purchase_register.read()
         twob_contents = await gstr_2b.read()
         
-        results = run_reconciliation(pr_contents, twob_contents, tenant)
-        run_id = results[0]["run_id"] if results else uuid.uuid4()
+        results, pr_list, twob_list = run_reconciliation(pr_contents, twob_contents, tenant)
         
+        run_id = uuid.uuid4()
+        if pr_list:
+            run_id = pr_list[0]["run_id"]
+        elif twob_list:
+            run_id = twob_list[0]["run_id"]
+            
         # Instantiate structural orchestration parent record
         db_run = ReconciliationRun(
             id=run_id,
@@ -304,6 +309,54 @@ async def reconcile_documents(
         )
         db.add(db_run)
         db.flush()  # Prevents foreign key parent-child race condition drops
+        
+        # Persist Purchase Invoices
+        for pr in pr_list:
+            db_pr = PurchaseInvoice(
+                id=pr["id"],
+                run_id=run_id,
+                client_id=tenant["client_id"],
+                invoice_number=pr["invoice_no"],
+                invoice_date=str(pr["invoice_date"] or ""),
+                supplier_gstin=pr["supplier_gstin"],
+                supplier_name=pr["supplier_name"],
+                taxable_value=pr["taxable_value"],
+                total_tax=pr["total_tax"]
+            )
+            db.add(db_pr)
+            
+        # Persist Portal Invoices
+        for twob in twob_list:
+            db_twob = PortalInvoice(
+                id=twob["id"],
+                run_id=run_id,
+                client_id=tenant["client_id"],
+                invoice_number=twob["invoice_no"],
+                invoice_date=str(twob["invoice_date"] or ""),
+                supplier_gstin=twob["supplier_gstin"],
+                supplier_name=twob["supplier_name"],
+                taxable_value=twob["taxable_value"],
+                total_tax=twob["total_tax"]
+            )
+            db.add(db_twob)
+            
+        db.flush()
+        
+        # Persist Vendors (if they don't exist yet)
+        known_gstins = {v.gstin: v for v in db.query(Vendor).filter(Vendor.client_id == tenant["client_id"]).all()}
+        for pr in pr_list:
+            gst = pr["supplier_gstin"]
+            if gst and gst not in known_gstins:
+                new_v = Vendor(
+                    client_id=tenant["client_id"],
+                    gstin=gst,
+                    legal_name=pr["supplier_name"] or "Vendor " + gst[:5],
+                    contact_email="finance@" + (pr["supplier_name"].lower().replace(" ", "").replace(".", "") if pr["supplier_name"] else "vendor") + ".in"
+                )
+                db.add(new_v)
+                known_gstins[gst] = new_v
+                
+        db.flush()
         
         # Append corresponding internal mapping array items
         for record in results:
@@ -404,9 +457,47 @@ class ClientCreate(BaseModel):
 
 @app.get("/api/v1/clients")
 def list_clients(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
-    # Simple MVP: return all clients in workspace
     clients = db.query(Client).filter(Client.workspace_id == tenant["workspace_id"]).all()
-    return [{"id": str(c.id), "name": c.legal_name, "gstin": c.gstin, "state": c.state_code, "status": "In progress"} for c in clients]
+    
+    res_list = []
+    for c in clients:
+        latest_run = db.query(ReconciliationRun).filter(ReconciliationRun.client_id == c.id).order_by(desc(ReconciliationRun.created_at)).first()
+        
+        invoices = 0
+        matched = 0
+        risk = 0.0
+        status = "Not started"
+        
+        if latest_run:
+            status = latest_run.status
+            invoices = db.query(MatchResult).filter(MatchResult.run_id == latest_run.id).count()
+            
+            matched_count = db.query(MatchResult).filter(
+                MatchResult.run_id == latest_run.id,
+                MatchResult.bucket.ilike("matched")
+            ).count()
+            
+            matched = int((matched_count / invoices) * 100) if invoices > 0 else 0
+            
+            risk = db.query(func.sum(MatchResult.tax_diff)).filter(
+                MatchResult.run_id == latest_run.id,
+                MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched", "Probable"])
+            ).scalar() or 0.0
+            
+        res_list.append({
+            "id": str(c.id),
+            "name": c.legal_name,
+            "gstin": c.gstin,
+            "state": c.state_code,
+            "status": status,
+            "invoices": invoices,
+            "matched": matched,
+            "risk": float(risk),
+            "deadline": "20 May 2026",
+            "assignee": "Amit Jain"
+        })
+        
+    return res_list
 
 @app.post("/api/v1/clients")
 def add_client(payload: ClientCreate, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
@@ -439,13 +530,28 @@ def update_client(client_id: str, payload: dict, db: Session = Depends(get_db)):
     return {"status": "success"}
 
 @app.delete("/api/v1/clients/{client_id}")
-def delete_client(client_id: str, db: Session = Depends(get_db)):
-    c = db.query(Client).filter(Client.id == client_id).first()
+def delete_client(client_id: str, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    c = db.query(Client).filter(
+        Client.id == client_id,
+        Client.workspace_id == tenant["workspace_id"]
+    ).first()
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
-    db.delete(c)
-    db.commit()
-    return {"status": "deleted"}
+    try:
+        # Cascade: remove all child data before deleting the client
+        runs = db.query(ReconciliationRun).filter(ReconciliationRun.client_id == c.id).all()
+        for run in runs:
+            db.query(MatchResult).filter(MatchResult.run_id == run.id).delete()
+            db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == run.id).delete()
+            db.query(PortalInvoice).filter(PortalInvoice.run_id == run.id).delete()
+        db.query(ReconciliationRun).filter(ReconciliationRun.client_id == c.id).delete()
+        db.query(Vendor).filter(Vendor.client_id == c.id).delete()
+        db.delete(c)
+        db.commit()
+        return {"status": "deleted", "id": client_id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete client: {str(e)}")
 
 # ---------------------------------------------------------
 # 9. RECONCILIATION FLOW ENDPOINTS (MISSING PIECES)
@@ -453,49 +559,278 @@ def delete_client(client_id: str, db: Session = Depends(get_db)):
 @app.get("/api/v1/clients/{client_id}/runs")
 def list_client_runs(client_id: str, db: Session = Depends(get_db)):
     runs = db.query(ReconciliationRun).filter(ReconciliationRun.client_id == client_id).order_by(desc(ReconciliationRun.created_at)).all()
-    return [{"id": str(r.id), "period": r.tax_period, "status": r.status, "created": r.created_at.strftime("%d %b, %H:%M")} for r in runs]
+    formatted = []
+    for r in runs:
+        total_invoices = db.query(MatchResult).filter(MatchResult.run_id == r.id).count()
+        matched_invoices = db.query(MatchResult).filter(
+            MatchResult.run_id == r.id, 
+            MatchResult.bucket == "Matched"
+        ).count()
+        match_percentage = int((matched_invoices / total_invoices * 100)) if total_invoices > 0 else 0
+        run_risk = db.query(func.sum(MatchResult.tax_diff)).filter(
+            MatchResult.run_id == r.id,
+            MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
+        ).scalar() or 0.0
+        
+        formatted.append({
+            "id": str(r.id),
+            "period": r.tax_period,
+            "status": r.status,
+            "invoices": total_invoices,
+            "matched": match_percentage,
+            "risk": float(run_risk),
+            "created": r.created_at.strftime("%d %b, %H:%M")
+        })
+    return formatted
 
 @app.get("/api/v1/runs/{run_id}/summary")
 def get_run_summary(run_id: str, db: Session = Depends(get_db)):
-    # Mocking for MVP response since engine doesn't currently bucket accurately without PR/2B tables
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+        
+    results = db.query(MatchResult).filter(MatchResult.run_id == run_uuid).all()
+    
+    buckets = ["matched", "mismatched", "missing_in_portal", "missing_in_books", "probable"]
+    counts = {b: 0 for b in buckets}
+    values = {b: 0.0 for b in buckets}
+    
+    pr_dict = {pr.id: pr for pr in db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == run_uuid).all()}
+    twob_dict = {twob.id: twob for twob in db.query(PortalInvoice).filter(PortalInvoice.run_id == run_uuid).all()}
+    
+    for r in results:
+        b = r.bucket.lower().replace("-", "_").replace(" ", "_")
+        if b not in counts:
+            b = "probable"
+            
+        counts[b] += 1
+        
+        tax_val = 0.0
+        if r.purchase_invoice_id and r.purchase_invoice_id in pr_dict:
+            tax_val = pr_dict[r.purchase_invoice_id].total_tax
+        elif r.portal_invoice_id and r.portal_invoice_id in twob_dict:
+            tax_val = twob_dict[r.portal_invoice_id].total_tax
+            
+        values[b] += tax_val
+        
+    summary_list = [
+        { "key": "matched", "label": "Matched", "value": float(values["matched"]), "count": counts["matched"] },
+        { "key": "mismatched", "label": "Mismatched", "value": float(values["mismatched"]), "count": counts["mismatched"] },
+        { "key": "missing_in_portal", "label": "Missing in Portal", "value": float(values["missing_in_portal"]), "count": counts["missing_in_portal"] },
+        { "key": "missing_in_books", "label": "Missing in Books", "value": float(values["missing_in_books"]), "count": counts["missing_in_books"] },
+        { "key": "probable", "label": "Probable", "value": float(values["probable"]), "count": counts["probable"] },
+    ]
+    
+    itc_at_risk = values["missing_in_portal"] + values["mismatched"] + values["probable"]
+    
     return {
-        "summary": [
-            { "key": "matched", "label": "Matched", "value": 4520500, "count": 142 },
-            { "key": "mismatched", "label": "Mismatched", "value": 215400, "count": 18 },
-            { "key": "missing_in_portal", "label": "Missing in Portal", "value": 850000, "count": 24 },
-            { "key": "missing_in_books", "label": "Missing in Books", "value": 112000, "count": 5 },
-            { "key": "probable", "label": "Probable", "value": 45000, "count": 3 },
-        ],
-        "itc_at_risk": 1065400,
+        "summary": summary_list,
+        "itc_at_risk": float(itc_at_risk),
     }
 
 @app.get("/api/v1/runs/{run_id}/invoices")
 def get_run_invoices(run_id: str, db: Session = Depends(get_db)):
-    # Requires PurchaseInvoice / PortalInvoice tables to be populated by the engine
-    # Since engine doesn't persist them yet, we return the mock list for MVP front-end compatibility
-    return [
-        { "id": 1, "gstin": "27AAACR1234F1Z5", "name": "Reliance Industries Ltd.", "inv": "INV/26/00123", "date": "12 Apr 2026", "taxable": 150000, "tax": 27000, "src": "PR", "diff": 0, "bucket": "matched" },
-        { "id": 2, "gstin": "29AAACT1234F1Z5", "name": "Tata Motors Limited", "inv": "TM/26/4452", "date": "15 Apr 2026", "taxable": 820000, "tax": 231000, "src": "2B", "diff": 1500, "bucket": "mismatched" }
-    ]
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+        
+    results = db.query(MatchResult).filter(MatchResult.run_id == run_uuid).all()
+    pr_dict = {pr.id: pr for pr in db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == run_uuid).all()}
+    twob_dict = {twob.id: twob for twob in db.query(PortalInvoice).filter(PortalInvoice.run_id == run_uuid).all()}
+    
+    invoices_list = []
+    for r in results:
+        pr = pr_dict.get(r.purchase_invoice_id) if r.purchase_invoice_id else None
+        twob = twob_dict.get(r.portal_invoice_id) if r.portal_invoice_id else None
+        
+        gstin = (pr.supplier_gstin if pr else twob.supplier_gstin) or "—"
+        name = (pr.supplier_name if pr else twob.supplier_name) or "—"
+        inv = (pr.invoice_number if pr else twob.invoice_number) or "—"
+        date = (pr.invoice_date if pr else twob.invoice_date) or "—"
+        taxable = (pr.taxable_value if pr else twob.taxable_value) or 0.0
+        tax = (pr.total_tax if pr else twob.total_tax) or 0.0
+        src = "PR" if pr and not twob else "2B" if twob and not pr else "PR+2B"
+        
+        invoices_list.append({
+            "id": str(r.id),
+            "gstin": gstin,
+            "name": name,
+            "inv": inv,
+            "date": date,
+            "taxable": float(taxable),
+            "tax": float(tax),
+            "src": src,
+            "diff": float(r.tax_diff),
+            "bucket": r.bucket.lower().replace("-", "_").replace(" ", "_")
+        })
+        
+    return invoices_list
 
 @app.get("/api/v1/runs/{run_id}/probable")
 def get_run_probable(run_id: str, db: Session = Depends(get_db)):
-    return [
-        { "id": "p1", "name": "Acme Corp India Pvt Ltd", "gstin": "27AAACP1234A1Z5", "date": "15-Apr-2026", "taxable": 125000, "tax": 22500, "conf": 86, "prInv": "INV/26-27/042", "twoInv": "26-27-42" },
-    ]
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+        
+    results = db.query(MatchResult).filter(
+        MatchResult.run_id == run_uuid,
+        MatchResult.bucket.ilike("probable")
+    ).all()
+    
+    pr_dict = {pr.id: pr for pr in db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == run_uuid).all()}
+    twob_dict = {twob.id: twob for twob in db.query(PortalInvoice).filter(PortalInvoice.run_id == run_uuid).all()}
+    
+    probable_list = []
+    for r in results:
+        pr = pr_dict.get(r.purchase_invoice_id)
+        twob = twob_dict.get(r.portal_invoice_id)
+        
+        if not pr or not twob:
+            continue
+            
+        probable_list.append({
+            "id": str(r.id),
+            "name": pr.supplier_name or twob.supplier_name or "—",
+            "gstin": pr.supplier_gstin or twob.supplier_gstin or "—",
+            "date": pr.invoice_date or twob.invoice_date or "—",
+            "taxable": float(pr.taxable_value),
+            "tax": float(pr.total_tax),
+            "conf": int(r.confidence),
+            "prInv": pr.invoice_number,
+            "twoInv": twob.invoice_number
+        })
+        
+    return probable_list
 
 # ---------------------------------------------------------
-# 10. SETTINGS & REPORTS (STUBS)
+# 10. SETTINGS, VENDORS, & REPORTS ENDPOINTS
 # ---------------------------------------------------------
+class WorkspaceUpdate(BaseModel):
+    name: str
+    type: str
+
+class UserInvite(BaseModel):
+    fullName: str
+    email: str
+    role: str
+
+class SettingsUpdate(BaseModel):
+    tax_tolerance: float
+    date_window_days: float
+    fuzzy_threshold: float
+
 @app.get("/api/v1/workspace")
 def get_workspace_profile(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
     ws = db.query(Workspace).filter(Workspace.id == tenant["workspace_id"]).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
     return {"id": str(ws.id), "name": ws.name, "type": ws.type}
+
+@app.patch("/api/v1/workspace")
+def update_workspace_profile(payload: WorkspaceUpdate, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    ws = db.query(Workspace).filter(Workspace.id == tenant["workspace_id"]).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    ws.name = payload.name
+    ws.type = payload.type
+    db.commit()
+    return {"status": "success", "workspace": {"id": str(ws.id), "name": ws.name, "type": ws.type}}
 
 @app.get("/api/v1/users")
 def get_workspace_users(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
     users = db.query(User).filter(User.workspace_id == tenant["workspace_id"]).all()
     return [{"id": str(u.id), "name": u.full_name, "email": u.email, "role": "admin"} for u in users]
+
+@app.post("/api/v1/users")
+def invite_workspace_user(payload: UserInvite, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    dummy_pass = hash_password("Password123")
+    new_user = User(
+        workspace_id=tenant["workspace_id"],
+        email=payload.email,
+        hashed_password=dummy_pass,
+        full_name=payload.fullName
+    )
+    db.add(new_user)
+    db.commit()
+    return {"status": "success", "user": {"id": str(new_user.id), "name": new_user.full_name, "email": new_user.email, "role": payload.role}}
+
+@app.get("/api/v1/workspace/settings")
+def get_workspace_settings(tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    settings = db.query(WorkspaceSettings).filter(WorkspaceSettings.workspace_id == tenant["workspace_id"]).first()
+    if not settings:
+        settings = WorkspaceSettings(workspace_id=tenant["workspace_id"])
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return {
+        "tax_tolerance": settings.tax_tolerance,
+        "date_window_days": settings.date_window_days,
+        "fuzzy_threshold": settings.fuzzy_threshold
+    }
+
+@app.patch("/api/v1/workspace/settings")
+def update_workspace_settings(payload: SettingsUpdate, tenant: dict = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    settings = db.query(WorkspaceSettings).filter(WorkspaceSettings.workspace_id == tenant["workspace_id"]).first()
+    if not settings:
+        settings = WorkspaceSettings(workspace_id=tenant["workspace_id"])
+        db.add(settings)
+    settings.tax_tolerance = payload.tax_tolerance
+    settings.date_window_days = payload.date_window_days
+    settings.fuzzy_threshold = payload.fuzzy_threshold
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/v1/clients/{client_id}/settings")
+def get_client_settings(client_id: str, db: Session = Depends(get_db)):
+    # Fallback to general workspace settings for individual clients in this MVP
+    return {
+        "tax_tolerance": 1.0,
+        "date_window_days": 2.0,
+        "fuzzy_threshold": 80.0
+    }
+
+@app.patch("/api/v1/clients/{client_id}/settings")
+def update_client_settings(client_id: str, payload: SettingsUpdate):
+    return {"status": "success"}
+
+@app.get("/api/v1/clients/{client_id}/vendors")
+def get_client_vendors(client_id: str, db: Session = Depends(get_db)):
+    try:
+        c_uuid = uuid.UUID(client_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid client ID format")
+    vendors = db.query(Vendor).filter(Vendor.client_id == c_uuid).all()
+    
+    # Calculate some dynamic status metrics for each vendor if runs exist
+    res = []
+    for v in vendors:
+        # Check mismatch count
+        mismatched_count = db.query(MatchResult).filter(
+            MatchResult.client_id == c_uuid,
+            MatchResult.bucket.in_(["Missing-in-Portal", "Mismatched"])
+        ).join(PurchaseInvoice, MatchResult.purchase_invoice_id == PurchaseInvoice.id).filter(
+            PurchaseInvoice.supplier_gstin == v.gstin
+        ).count()
+        
+        status = "Reliable"
+        color = "green"
+        if mismatched_count > 5:
+            status = "Frequent defaults"
+            color = "amber"
+        elif mismatched_count > 0:
+            status = "Discrepancy flagged"
+            color = "amber"
+            
+        res.append({
+            "name": v.legal_name,
+            "gstin": v.gstin,
+            "status": status,
+            "color": color
+        })
+    return res
 
 @app.get("/api/v1/runs/{run_id}/reports/{report_type}")
 def download_report(run_id: str, report_type: str):

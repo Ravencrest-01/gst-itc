@@ -17,6 +17,7 @@ def normalize_row(raw_row: Dict[str, Any]) -> Dict[str, Any]:
         "client_id": raw_row.get("client_id"),
         "run_id": raw_row.get("run_id"),
         "supplier_gstin": clean_gstin(raw_row.get("supplier_gstin", "")),
+        "supplier_name": raw_row.get("supplier_name", raw_row.get("name", "")),
         "invoice_no": raw_row.get("invoice_no", ""),
         "invoice_no_norm": clean_invoice_no(raw_row.get("invoice_no", "")),
         "invoice_date": parse_date(raw_row.get("invoice_date")),

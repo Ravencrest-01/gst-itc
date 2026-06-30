@@ -731,6 +731,8 @@ function Reconciliation({ client, go, live }) {
           </div>
         </div>
       </Card>
+      </>
+      )}
     </div>
   );
 }

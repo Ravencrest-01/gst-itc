@@ -39,6 +39,7 @@ try:
     # Verify or seed global tenant Workspace
     if not db_seed.query(Workspace).filter(Workspace.id == mock_ws_id).first():
         db_seed.add(Workspace(id=mock_ws_id, name="Alpha CA Firm Practice", type="ca_firm"))
+        db_seed.flush()
         print(" Seeded: Workspace row added to database.")
         
     # Verify or seed specific corporate operational Client

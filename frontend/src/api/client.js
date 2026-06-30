@@ -51,6 +51,36 @@ export const listClients = () => req("/api/v1/clients");
 export const createClient = (data) => req("/api/v1/clients", { method: "POST", body: data }); // {gstin, legal_name, state_code}
 export const deleteClient = (id) => req(`/api/v1/clients/${id}`, { method: "DELETE" });
 
+// ---- runs ----
+export const recentRuns = (limit = 10) => req(`/api/v1/runs/recent?limit=${limit}`); // { runs: [...] }
+
+// ---- exports ----
+// Streams a generated file back; we read it as a blob and trigger a browser download.
+export async function downloadReport(runId, type, format = "csv") {
+  const headers = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const cid = getActiveClient();
+  if (cid) headers["X-Client-Id"] = cid;
+
+  const r = await fetch(`${BASE}/api/v1/runs/${runId}/reports/${type}?format=${format}`, { headers });
+  if (r.status === 401) { setToken(null); onUnauthorized(); throw new Error("Session expired."); }
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { const j = await r.json(); detail = j.detail || detail; } catch { /* non-JSON */ }
+    throw new Error(detail);
+  }
+  const blob = await r.blob();
+  const cd = r.headers.get("content-disposition") || "";
+  const m = cd.match(/filename="?([^"]+)"?/);
+  const name = m ? m[1] : `${type}_${runId}.${format}`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ---- reconcile (kept) ----
 export async function reconcile(prFile, twobFile) {
   const fd = new FormData();

@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { health, reconcile, listClients, createClient, deleteClient, setActiveClient as apiSetActiveClient } from "./api/client";
+import { health, reconcile, listClients, createClient, deleteClient, recentRuns, downloadReport, setActiveClient as apiSetActiveClient } from "./api/client";
 import { useAuth } from "./auth/AuthContext";
 
 /* Group raw backend match rows (keyed by `bucket`) into our five buckets. */
@@ -613,7 +613,7 @@ function Reconciliation({ client, go, live }) {
   return (
     <div>
       <PageHead title={`${client.name} — Apr 2026`} subtitle={`${client.gstin} · last synced Today, 09:45`}
-        right={<><Btn icon={Download}>Export report</Btn><Btn variant="primary" icon={Play} onClick={() => go("new")}>Run again</Btn></>} />
+        right={<><Btn icon={Download} onClick={() => live ? downloadReport(live.runId, "reconciliation", "xlsx").catch((e) => alert(e.message)) : go("reports")}>Export report</Btn><Btn variant="primary" icon={Play} onClick={() => go("new")}>Run again</Btn></>} />
       <div style={{ marginTop: -8, display: "flex", alignItems: "center", gap: 10 }}>
         {runStatusChip(live ? "Completed" : "In progress")}
         {live && <span style={{ ...TNUM, fontSize: 11.5, fontWeight: 700, color: C.green2, background: "#E5F3EB", padding: "2px 8px", borderRadius: 4 }}>
@@ -878,28 +878,93 @@ function Review({ client, go }) {
    ============================================================ */
 function Reports({ client }) {
   const reports = [
-    { t: "Invoice-level reconciliation statement", d: "Every variance between books and portal, ready for ASMT-10.", fmt: "XLSX · PDF" },
-    { t: "Safe-to-claim summary (GSTR-3B)", d: "Matched + eligible ITC cleared for the 3B draft.", fmt: "XLSX" },
-    { t: "Discrepancy notices (per vendor)", d: "Mismatched and missing-in-portal invoices, grouped by supplier.", fmt: "PDF" },
-    { t: "ITC at risk — ageing", d: "Unmatched credit by ageing bucket against Section 16(4).", fmt: "XLSX · PDF" },
-    { t: "Vendor compliance scorecard", d: "Filing reliability and defaulted value by vendor.", fmt: "XLSX" },
-    { t: "Annual reconciliation ledger (GSTR-9/9C)", d: "Monthly runs rolled up for the annual return.", fmt: "XLSX" },
+    { type: "reconciliation", t: "Invoice-level reconciliation statement", d: "Every variance between books and portal, ready for ASMT-10." },
+    { type: "safe-to-claim", t: "Safe-to-claim summary (GSTR-3B)", d: "Matched + eligible ITC cleared for the 3B draft." },
+    { type: "at-risk", t: "ITC at risk", d: "Mismatched, missing-in-portal and probable invoices." },
+    { type: "notices", t: "Discrepancy notices (per vendor)", d: "Flagged invoices grouped by supplier." },
+    { type: "vendor-scorecard", t: "Vendor compliance scorecard", d: "Filing reliability and defaulted value by vendor." },
+    { type: "annual-ledger", t: "Annual reconciliation ledger (GSTR-9/9C)", d: "Monthly runs rolled up for the annual return." },
   ];
+  const [runs, setRuns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [runId, setRunId] = useState("");
+  const [format, setFormat] = useState("xlsx");
+  const [busyType, setBusyType] = useState("");
+  const [dlErr, setDlErr] = useState("");
+
+  useEffect(() => {
+    setLoading(true); setErr("");
+    recentRuns(20)
+      .then((d) => {
+        const list = (d && d.runs) || [];
+        setRuns(list);
+        if (list.length) setRunId(list[0].id);
+      })
+      .catch((e) => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, [client.id]);
+
+  const download = async (type) => {
+    if (!runId) return;
+    setDlErr(""); setBusyType(type);
+    try { await downloadReport(runId, type, format); }
+    catch (e) { setDlErr(e.message); }
+    finally { setBusyType(""); }
+  };
+
   return (
     <div>
-      <PageHead title="Reports" subtitle={`${client.name} · ${client.gstin} · Apr 2026`} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        {reports.map((r) => (
-          <Card key={r.t} style={{ padding: 16, display: "flex", gap: 14, alignItems: "flex-start" }}>
-            <div style={{ width: 40, height: 40, borderRadius: 8, background: "#EAF2FB", display: "grid", placeItems: "center", flexShrink: 0 }}><FileText size={20} color={C.blue} /></div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>{r.t}</div>
-              <div style={{ fontSize: 12.5, color: C.textMute, margin: "4px 0 12px", lineHeight: 1.45 }}>{r.d}</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint }}>{r.fmt}</span><Btn icon={Download} style={{ height: 30 }}>Generate</Btn></div>
+      <PageHead title="Reports & exports" subtitle={`${client.name} · ${client.gstin}`} />
+
+      {loading ? (
+        <div style={{ padding: 50, textAlign: "center", color: C.textMute }}><Loader2 size={22} className="spin" /><div style={{ marginTop: 8, fontSize: 13 }}>Loading runs…</div></div>
+      ) : err ? (
+        <Card style={{ padding: 24, maxWidth: 460 }}><div style={{ color: C.red, fontWeight: 600 }}>Couldn't load runs</div><div style={{ color: C.textMute, fontSize: 13, marginTop: 4 }}>{err}</div></Card>
+      ) : runs.length === 0 ? (
+        <Card style={{ padding: 40, maxWidth: 480, textAlign: "center" }}>
+          <FileText size={26} color={C.textFaint} />
+          <div style={{ fontSize: 15, fontWeight: 700, marginTop: 10 }}>No runs to export yet</div>
+          <div style={{ fontSize: 13, color: C.textMute, marginTop: 4 }}>Run a reconciliation for this company, then export its statements here.</div>
+        </Card>
+      ) : (
+        <>
+          {/* run + format selector */}
+          <Card style={{ padding: 14, marginBottom: 16, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: C.textMute }}>Run</span>
+              <select value={runId} onChange={(e) => setRunId(e.target.value)} style={{ ...TNUM, height: 36, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 10px", fontSize: 13, background: "#fff" }}>
+                {runs.map((r) => <option key={r.id} value={r.id}>{r.tax_period} · {r.status} · {r.created_on}</option>)}
+              </select>
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: C.textMute }}>Format</span>
+              {["xlsx", "csv"].map((f) => (
+                <button key={f} onClick={() => setFormat(f)} style={{ height: 32, padding: "0 12px", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", textTransform: "uppercase",
+                  border: `1px solid ${format === f ? C.navy : C.border}`, background: format === f ? C.navy : "#fff", color: format === f ? "#fff" : C.textMute }}>{f}</button>
+              ))}
+            </div>
+            {dlErr && <span style={{ color: C.red, fontSize: 12.5 }}>{dlErr}</span>}
           </Card>
-        ))}
-      </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {reports.map((r) => (
+              <Card key={r.type} style={{ padding: 16, display: "flex", gap: 14, alignItems: "flex-start" }}>
+                <div style={{ width: 40, height: 40, borderRadius: 8, background: "#EAF2FB", display: "grid", placeItems: "center", flexShrink: 0 }}><FileText size={20} color={C.blue} /></div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{r.t}</div>
+                  <div style={{ fontSize: 12.5, color: C.textMute, margin: "4px 0 12px", lineHeight: 1.45 }}>{r.d}</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+                    <Btn icon={busyType === r.type ? Loader2 : Download} style={{ height: 30 }} disabled={!!busyType} onClick={() => download(r.type)}>
+                      {busyType === r.type ? "Exporting…" : "Export"}
+                    </Btn>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

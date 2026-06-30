@@ -1,13 +1,17 @@
 import io
 import csv
 import uuid
+import os
+import random
+import csv, io
 from datetime import datetime
 from typing import Optional, List
-import random
+from app.core.email_otp import send_otp_email 
+from fastapi.responses import StreamingResponse
 from datetime import timedelta
 from pydantic import BaseModel, EmailStr
-
 from fastapi import FastAPI, Depends, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 
@@ -77,10 +81,14 @@ class UserLogin(BaseModel):
 # ---------------------------------------------------------
 # 3. FASTAPI CORE CONTAINER INSTANTIATION
 # ---------------------------------------------------------
-app = FastAPI(
-    title="ITC Reconciliation Engine API",
-    description="MVP Backend API powered by persistent PostgreSQL storage.",
-    version="2.0.0"
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")],
+    allow_credentials=False,        # we use bearer tokens, not cookies
+    allow_methods=["*"],
+    allow_headers=["*"],            # covers Authorization + X-Client-Id
 )
 
 @app.get("/")
@@ -102,8 +110,8 @@ def request_otp(payload: OTPRequest, db: Session = Depends(get_db)):
     )
     db.add(otp_entry)
     db.commit()
-    
-    print(f"\n{'='*40}\nMock OTP for {payload.email}: {otp_code}\n{'='*40}\n")
+
+    send_otp_email(payload.email, otp_code)
     return {"status": "success", "message": "OTP sent to email"}
 
 @app.post("/api/v1/auth/register")
@@ -832,6 +840,110 @@ def get_client_vendors(client_id: str, db: Session = Depends(get_db)):
         })
     return res
 
+# ============================================================
+#  REAL EXPORT ROUTE  — replace the stubbed download_report in app/main.py
+#  with the version below.
+#
+#  Add these imports near the top of app/main.py (if not already present):
+#      import csv, io
+#      from fastapi.responses import StreamingResponse
+#  (uuid, HTTPException, Depends, Session, get_db, get_current_tenant_context,
+#   ReconciliationRun, MatchResult, PurchaseInvoice, PortalInvoice are already imported.)
+#
+#  CSV always works (stdlib). XLSX works if `openpyxl` is installed
+#  (pip install openpyxl); otherwise it transparently falls back to CSV.
+# ============================================================
+
 @app.get("/api/v1/runs/{run_id}/reports/{report_type}")
-def download_report(run_id: str, report_type: str):
-    return {"status": "generated", "url": f"https://s3.mock.url/reports/{run_id}_{report_type}.xlsx"}
+def download_report(
+    run_id: str,
+    report_type: str,
+    format: str = "csv",
+    tenant: dict = Depends(get_current_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """ Builds a downloadable reconciliation export (CSV / XLSX) from saved rows. """
+    run_uuid = uuid.UUID(run_id)
+
+    # Auth: the run must belong to the caller's workspace.
+    run = db.query(ReconciliationRun).filter(ReconciliationRun.id == run_uuid).first()
+    if not run or run.workspace_id != tenant["workspace_id"]:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    results = db.query(MatchResult).filter(MatchResult.run_id == run_uuid).all()
+
+    # Optional filtering by report type.
+    risk_buckets = {"Missing-in-Portal", "Mismatched", "Probable"}
+    if report_type == "safe-to-claim":
+        results = [r for r in results if (r.bucket or "").lower() == "matched"]
+    elif report_type == "at-risk":
+        results = [r for r in results if r.bucket in risk_buckets]
+    # other types (reconciliation, notices, vendor-scorecard, annual-ledger) export all rows
+
+    # Invoice detail lookups (so the export has supplier + amounts, not just ids).
+    pr = {p.id: p for p in db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == run_uuid).all()}
+    pb = {p.id: p for p in db.query(PortalInvoice).filter(PortalInvoice.run_id == run_uuid).all()}
+
+    headers = [
+        "bucket", "match_pass", "confidence", "tax_diff",
+        "supplier_gstin", "supplier_name",
+        "pr_invoice_no", "pr_taxable_value", "pr_total_tax",
+        "portal_invoice_no", "portal_taxable_value", "portal_total_tax",
+    ]
+
+    def row_values(r):
+        p = pr.get(r.purchase_invoice_id)
+        b = pb.get(r.portal_invoice_id)
+        src = p or b  # supplier info from whichever side exists
+        return [
+            r.bucket, r.match_pass, r.confidence, float(r.tax_diff or 0),
+            getattr(src, "supplier_gstin", "") or "",
+            getattr(src, "supplier_name", "") or "",
+            getattr(p, "invoice_number", "") or "",
+            float(getattr(p, "taxable_value", 0) or 0),
+            float(getattr(p, "total_tax", 0) or 0),
+            getattr(b, "invoice_number", "") or "",
+            float(getattr(b, "taxable_value", 0) or 0),
+            float(getattr(b, "total_tax", 0) or 0),
+        ]
+
+    filename = f"{report_type}_{run_id[:8]}"
+
+    # ---- XLSX (if openpyxl is available) ----
+    if format == "xlsx":
+        try:
+            import openpyxl
+            from openpyxl.styles import Font
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Reconciliation"
+            ws.append(headers)
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+            for r in results:
+                ws.append(row_values(r))
+
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="{filename}.xlsx"'},
+            )
+        except ImportError:
+            pass  # no openpyxl -> fall through to CSV
+
+    # ---- CSV (always available) ----
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(headers)
+    for r in results:
+        writer.writerow(row_values(r))
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
+    )

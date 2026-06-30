@@ -37,7 +37,7 @@ async function req(path, { method = "GET", body, isForm } = {}) {
 }
 
 export const health = () =>
-  fetch(`${BASE}/healthz`).then((r) => { if (!r.ok) throw new Error("offline"); return r.json(); });
+  fetch(`${BASE}/`).then((r) => { if (!r.ok) throw new Error("offline"); return r.json(); });
 
 // ---- auth ----
 export const requestOtp = (email) => req("/api/v1/auth/request-otp", { method: "POST", body: { email } });

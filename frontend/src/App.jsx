@@ -4,14 +4,13 @@ import {
   Bell, HelpCircle, Search, Download, Play, AlertTriangle, Check, X, Briefcase,
   ChevronRight, ChevronLeft, ChevronDown, Building2, Users, SlidersHorizontal,
   FileSpreadsheet, Trash2, CheckCircle2, Plus, Filter, Columns3, Landmark,
-  CloudDownload, ShieldCheck, CalendarClock, CreditCard, Loader2,
+  CloudDownload, ShieldCheck, CalendarClock, CreditCard, Loader2, LogOut,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { health, requestOtp, register, login, getCurrentUser, getWorkspace, getClients, addClient, deleteClient, getClientRuns, getRunSummary, getRunInvoices, getRunResults, getRunProbable, submitReviewMatch, reconcile, updateWorkspace, inviteUser, getWorkspaceSettings, updateWorkspaceSettings, getClientSettings, updateClientSettings, getClientVendors, getDashboardKpis, updateClient, downloadReport, getWorkspaceUsers } from "./api/client";
-
-export const AppContext = React.createContext({});
+import { health, reconcile, listClients, createClient, deleteClient, setActiveClient as apiSetActiveClient } from "./api/client";
+import { useAuth } from "./auth/AuthContext";
 
 /* Group raw backend match rows (keyed by `bucket`) into our five buckets. */
 function summarize(rows) {
@@ -71,15 +70,7 @@ const BUCKET = {
    ============================================================ */
 const WORKSPACE = { name: "Sharma & Associates", type: "ca_firm" }; // type: ca_firm | in_house
 
-// API: GET /clients
-const CLIENTS = [
-  { id: "c1", name: "Acme Corp Pvt Ltd", gstin: "27AAAAA0000A1Z5", state: "Maharashtra", status: "In progress", invoices: 192, matched: 88, risk: 1065400, deadline: "20 May 2026", assignee: "Amit Jain" },
-  { id: "c2", name: "Beta Textiles Ltd", gstin: "24BBBBB1111B1Z3", state: "Gujarat", status: "Review", invoices: 452, matched: 88, risk: 210400, deadline: "20 May 2026", assignee: "Priya Nair" },
-  { id: "c3", name: "Gamma Logistics LLP", gstin: "29GGGGG2222C1Z1", state: "Karnataka", status: "Closed", invoices: 389, matched: 98, risk: 12500, deadline: "\u2014", assignee: "Rahul Mehta" },
-  { id: "c4", name: "Delta Foods Pvt Ltd", gstin: "07DDDDD3333D1Z9", state: "Delhi", status: "Pending", invoices: 310, matched: 85, risk: 117900, deadline: "20 May 2026", assignee: "Priya Nair" },
-  { id: "c5", name: "Epsilon Pharma Ltd", gstin: "33EEEEE4444E1Z7", state: "Tamil Nadu", status: "Not started", invoices: 0, matched: 0, risk: 0, deadline: "20 May 2026", assignee: "Amit Jain" },
-  { id: "c6", name: "Zeta Motors Pvt Ltd", gstin: "06ZZZZZ5555Z1Z2", state: "Haryana", status: "Closed", invoices: 485, matched: 96, risk: 0, deadline: "\u2014", assignee: "Rahul Mehta" },
-];
+// Companies are fetched live from GET /api/v1/clients (see App()).
 
 // Per-client run detail (illustrative — same shape for every client).  API: GET /clients/:cid/runs/:id/*
 const INVOICES = [
@@ -121,8 +112,8 @@ const PROBABLE = [
 /* ============================================================
    PRIMITIVES
    ============================================================ */
-function Card({ children, style, className = "" }) {
-  return <div className={`rounded-md ${className}`} style={{ background: C.surface, border: `1px solid ${C.border}`, ...style }}>{children}</div>;
+function Card({ children, style, className = "", onClick }) {
+  return <div className={`rounded-md ${className}`} onClick={onClick} style={{ background: C.surface, border: `1px solid ${C.border}`, ...style }}>{children}</div>;
 }
 function Btn({ variant = "secondary", icon: Icon, children, onClick, disabled, style }) {
   const baseS = { display: "inline-flex", alignItems: "center", gap: 6, height: 34, padding: "0 14px", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, border: "1px solid transparent", whiteSpace: "nowrap", ...style };
@@ -167,23 +158,14 @@ const NAV = [
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-function workspaceTypeLabel(type) {
-  if (type === "ca_firm") return "CA Firm";
-  if (type === "solo_ca") return "Solo CA";
-  if (type === "in_house") return "In-house";
-  return "CA";
-}
-
-function Sidebar({ page, setPage }) {
-  const { workspace, currentUser } = React.useContext(AppContext);
-  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
-  const name = currentUser?.name || "";
-  const initials = name.split(" ").map(p => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "CA";
+function Sidebar({ page, setPage, user, onLogout }) {
+  const name = user?.name || "—";
+  const initials = name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "U";
   return (
     <aside style={{ width: 240, background: C.navy, color: "#fff", display: "flex", flexDirection: "column", flexShrink: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,.12)" }}>
         <div style={{ width: 34, height: 34, borderRadius: 7, background: "rgba(255,255,255,.12)", display: "grid", placeItems: "center" }}><Landmark size={18} /></div>
-        <div><div style={{ fontSize: 14.5, fontWeight: 700, lineHeight: 1.1 }}>GST Reconciliation</div><div style={{ fontSize: 11, color: "rgba(255,255,255,.6)" }}>{workspaceTypeLabel(WORKSPACE.type)}</div></div>
+        <div><div style={{ fontSize: 14.5, fontWeight: 700, lineHeight: 1.1 }}>GST Reconciliation</div><div style={{ fontSize: 11, color: "rgba(255,255,255,.6)" }}>Practice Edition</div></div>
       </div>
       <nav style={{ padding: 10, flex: 1 }}>
         {NAV.map((n) => {
@@ -192,31 +174,34 @@ function Sidebar({ page, setPage }) {
             <n.icon size={19} strokeWidth={2} /> {n.label}</button>;
         })}
       </nav>
-      <div style={{ padding: 16, borderTop: "1px solid rgba(255,255,255,.12)", display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 999, background: "rgba(255,255,255,.16)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700 }}>{initials}</div>
-        <div style={{ minWidth: 0, flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{name || "User"}</div><div style={{ fontSize: 11, color: "rgba(255,255,255,.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{WORKSPACE.name}</div></div>
+      <div style={{ padding: 16, borderTop: "1px solid rgba(255,255,255,.12)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 32, height: 32, borderRadius: 999, background: "rgba(255,255,255,.16)", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700 }}>{initials}</div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,.6)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.email || ""}</div>
+          </div>
+        </div>
+        <button onClick={onLogout} style={{ width: "100%", marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, padding: "8px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,.18)", background: "transparent", color: "rgba(255,255,255,.85)", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
+          <LogOut size={15} /> Sign out
+        </button>
       </div>
     </aside>
   );
 }
 
 function ClientSwitcher({ clients, activeId, onPick }) {
-  const { workspace } = React.useContext(AppContext);
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const active = clients.find((c) => c.id === activeId);
   const filtered = clients.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) || c.gstin.toLowerCase().includes(q.toLowerCase()));
-  const isSolo = workspace?.type === "solo_ca";
-  const singleClientSolo = isSolo && clients.length === 1;
-  const practiceLabel = isSolo ? "All my clients" : "All clients";
-  const practiceSubLabel = isSolo ? "Solo view" : "Practice view";
   return (
     <div style={{ position: "relative" }}>
       <button onClick={() => setOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 9, height: 36, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 8, background: "#fff", cursor: "pointer", minWidth: 230 }}>
         <Briefcase size={16} color={C.navy} />
         <div style={{ textAlign: "left", flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.1 }}>{active ? active.name : practiceLabel}</div>
-          <div style={{ ...TNUM, fontSize: 10.5, color: C.textMute }}>{active ? active.gstin : practiceSubLabel}</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.1 }}>{active ? active.name : "All clients"}</div>
+          <div style={{ ...TNUM, fontSize: 10.5, color: C.textMute }}>{active ? active.gstin : "Practice view"}</div>
         </div>
         <ChevronDown size={15} color={C.textMute} />
       </button>
@@ -230,13 +215,11 @@ function ClientSwitcher({ clients, activeId, onPick }) {
             </div>
           </div>
           <div style={{ maxHeight: 320, overflow: "auto", padding: 6 }}>
-            {!singleClientSolo && (
-              <button onClick={() => { onPick(null); setOpen(false); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "9px 10px", borderRadius: 7, border: "none", cursor: "pointer", textAlign: "left", background: activeId === null ? "#EAF2FB" : "transparent" }}>
-                <LayoutDashboard size={16} color={C.navy} />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{practiceLabel} · {practiceSubLabel}</span>
-              </button>
-            )}
-            {!singleClientSolo && <div style={{ height: 1, background: C.borderLite, margin: "6px 4px" }} />}
+            <button onClick={() => { onPick(null); setOpen(false); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "9px 10px", borderRadius: 7, border: "none", cursor: "pointer", textAlign: "left", background: activeId === null ? "#EAF2FB" : "transparent" }}>
+              <LayoutDashboard size={16} color={C.navy} />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>All clients · Practice view</span>
+            </button>
+            <div style={{ height: 1, background: C.borderLite, margin: "6px 4px" }} />
             {filtered.map((c) => {
               const sc = { "In progress": C.blue, Review: C.amber, Pending: C.amber, "Not started": C.slate, Closed: C.green }[c.status] || C.slate;
               return <button key={c.id} onClick={() => { onPick(c.id); setOpen(false); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "9px 10px", borderRadius: 7, border: "none", cursor: "pointer", textAlign: "left", background: activeId === c.id ? "#EAF2FB" : "transparent" }}>
@@ -255,48 +238,15 @@ function ClientSwitcher({ clients, activeId, onPick }) {
   );
 }
 
-function UserMenu({ onLogout, setPage }) {
-  const { currentUser, workspace } = React.useContext(AppContext);
-  const [open, setOpen] = useState(false);
-  const name = currentUser?.name || "User";
-  const email = currentUser?.email || "";
-  const initials = name.split(" ").map(p => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "CA";
-  return (
-    <div style={{ position: "relative" }}>
-      <button onClick={() => setOpen(o => !o)} style={{ width: 32, height: 32, borderRadius: 999, background: C.navy, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" }}>{initials}</button>
-      {open && <>
-        <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
-        <div style={{ position: "absolute", top: 40, right: 0, width: 230, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: "0 8px 28px rgba(20,40,70,.14)", zIndex: 50, overflow: "hidden" }}>
-          <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.borderLite}` }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700 }}>{name}</div>
-            <div style={{ fontSize: 12, color: C.textMute, marginTop: 2 }}>{email}</div>
-          </div>
-          <button onClick={() => { setPage("settings"); setOpen(false); }} style={{ width: "100%", textAlign: "left", padding: "11px 16px", border: "none", cursor: "pointer", background: "transparent", fontSize: 13, color: C.text, display: "flex", alignItems: "center", gap: 8 }}>
-            <SettingsIcon size={15} color={C.textMute} /> Profile & settings
-          </button>
-          <div style={{ height: 1, background: C.borderLite, margin: "0 16px" }} />
-          <button onClick={() => { setOpen(false); onLogout(); }} style={{ width: "100%", textAlign: "left", padding: "11px 16px", border: "none", cursor: "pointer", background: "transparent", fontSize: 13, color: C.red, display: "flex", alignItems: "center", gap: 8 }}>
-            <X size={15} color={C.red} /> Log out
-          </button>
-        </div>
-      </>}
-    </div>
-  );
-}
-
-function Topbar({ clients, activeId, setActiveId, period, setPeriod, apiOk, onLogout, setPage }) {
-  const { workspace } = React.useContext(AppContext);
-  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
+function Topbar({ clients, activeId, setActiveId, period, setPeriod, apiOk }) {
   const dot = apiOk === true ? C.green : apiOk === false ? C.textFaint : C.amber;
   const lbl = apiOk === true ? "API connected" : apiOk === false ? "API offline" : "Checking…";
-  const typeLabel = workspaceTypeLabel(WORKSPACE.type);
-  const typeBadgeColor = WORKSPACE.type === "solo_ca" ? { color: "#5B4FCF", bg: "#EDE9FE" } : WORKSPACE.type === "in_house" ? { color: C.navy, bg: "#EAF2FB" } : { color: C.green2, bg: "#E5F3EB" };
   return (
     <header style={{ height: 56, background: "#fff", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", padding: "0 24px", gap: 16, flexShrink: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Building2 size={17} color={C.navy} />
         <span style={{ fontSize: 14.5, fontWeight: 700, color: C.text }}>{WORKSPACE.name}</span>
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: typeBadgeColor.color, background: typeBadgeColor.bg, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>{typeLabel}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: C.green2, background: "#E5F3EB", padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>CA Firm</span>
       </div>
       <div style={{ width: 1, height: 24, background: C.border }} />
       <ClientSwitcher clients={clients} activeId={activeId} onPick={setActiveId} />
@@ -307,8 +257,8 @@ function Topbar({ clients, activeId, setActiveId, period, setPeriod, apiOk, onLo
         <span title={lbl} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 600, color: C.textMute }}>
           <span style={{ width: 8, height: 8, borderRadius: 999, background: dot }} />{lbl}
         </span>
-        <Bell size={18} />
-        <UserMenu onLogout={onLogout} setPage={setPage} />
+        <Bell size={18} /><HelpCircle size={18} />
+        <div style={{ width: 30, height: 30, borderRadius: 999, background: C.navy, color: "#fff", display: "grid", placeItems: "center", fontSize: 12, fontWeight: 700 }}>AJ</div>
       </div>
     </header>
   );
@@ -343,13 +293,17 @@ function ClientGate({ client, clients, onPick, children }) {
 /* ============================================================
    PAGE — Practice dashboard (no client selected)
    ============================================================ */
-function PracticeDashboard({ clients, go, openClient }) {
-  const { workspace, clientRuns, summary, itcAtRisk } = React.useContext(AppContext);
-  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
-  const CLIENT_RUNS = clientRuns || [];
-  const SUMMARY = summary || [];
-  const ITC_AT_RISK = itcAtRisk || 0;
-  const isSolo = WORKSPACE.type === "solo_ca";
+function PracticeDashboard({ clients, go, openClient, loading, err }) {
+  if (loading) return <div style={{ padding: 60, textAlign: "center", color: C.textMute }}><Loader2 size={24} className="spin" /><div style={{ marginTop: 8, fontSize: 13 }}>Loading your practice…</div></div>;
+  if (err) return <Card style={{ padding: 28, maxWidth: 460 }}><div style={{ color: C.red, fontWeight: 600 }}>Couldn't load data</div><div style={{ color: C.textMute, fontSize: 13, marginTop: 4 }}>{err}</div></Card>;
+  if (clients.length === 0) return (
+    <Card style={{ padding: 40, maxWidth: 480, textAlign: "center" }}>
+      <Briefcase size={28} color={C.textFaint} />
+      <div style={{ fontSize: 16, fontWeight: 700, marginTop: 10 }}>Welcome — add your first company</div>
+      <div style={{ fontSize: 13, color: C.textMute, marginTop: 4 }}>Once you add a client company, its reconciliation overview shows here.</div>
+      <Btn variant="primary" icon={Plus} style={{ marginTop: 16 }} onClick={() => go("clients")}>Go to Companies</Btn>
+    </Card>
+  );
   const totalRisk = clients.reduce((a, c) => a + c.risk, 0);
   const due = clients.filter((c) => ["In progress", "Pending", "Review", "Not started"].includes(c.status)).length;
   const flagged = clients.filter((c) => c.risk > 0).length;
@@ -365,7 +319,7 @@ function PracticeDashboard({ clients, go, openClient }) {
 
   return (
     <div>
-      <PageHead title={isSolo ? "My reconciliations" : "Practice overview"} subtitle={`${WORKSPACE.name} · ${clients.length} ${isSolo ? "clients" : "clients"} · FY 2026–27`}
+      <PageHead title="Practice overview" subtitle={`${WORKSPACE.name} · ${clients.length} clients · FY 2026–27`}
         right={<Btn variant="primary" icon={Plus} onClick={() => go("new")}>New reconciliation</Btn>} />
       <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
         {stat("Active clients", String(clients.length), C.navy, Briefcase)}
@@ -443,40 +397,24 @@ function PracticeDashboard({ clients, go, openClient }) {
    PAGE — Client dashboard (a client selected)
    ============================================================ */
 function ClientDashboard({ client, go }) {
-  const { clientRuns, summary } = React.useContext(AppContext);
-  const [kpis, setKpis] = useState({ open_runs: 0, itc_recovered: 0, itc_at_risk: client.risk || 0, vendors_flagged: 0 });
-
-  useEffect(() => {
-    getDashboardKpis().then(res => {
-      setKpis(res);
-    }).catch(() => {});
-  }, [client]);
-
   const stat = (label, value, color, Icon) => (
     <Card key={label} style={{ padding: 16, flex: 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between" }}><Label>{label}</Label><Icon size={16} color={C.textFaint} /></div>
       <div style={{ ...TNUM, fontSize: 26, fontWeight: 700, marginTop: 10, color: color || C.navy }}>{value}</div>
     </Card>
   );
-
-  const attention = [
-    { dot: C.amber, t: `${summary.find(s => s.key === "probable")?.count || 0} probable matches to review`, s: "Apr 2026", go: "review" },
-    { dot: C.red, t: `${inr(summary.find(s => s.key === "missing_in_portal")?.value || 0)} missing in portal`, s: "Apr 2026", go: "reconciliation" },
-    { dot: C.slate, t: `${summary.find(s => s.key === "missing_in_books")?.count || 0} invoices missing in books`, s: "Apr 2026", go: "reconciliation" }
-  ];
-
   return (
     <div>
       <PageHead title={client.name} subtitle={`${client.gstin} · ${client.state} · FY 2026–27`}
         right={<Btn variant="primary" icon={Plus} onClick={() => go("new")}>New reconciliation</Btn>} />
       <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
-        {stat("Open runs", String(kpis.open_runs), C.navy, LayoutDashboard)}
-        {stat("ITC recovered (FY)", inrShort(kpis.itc_recovered), C.navy, ShieldCheck)}
+        {stat("Open runs", "1", C.navy, LayoutDashboard)}
+        {stat("ITC recovered (FY)", inrShort(2310000), C.navy, ShieldCheck)}
         <Card style={{ padding: 16, flex: 1, borderLeft: `3px solid ${C.red}` }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><Label>ITC at risk</Label><AlertTriangle size={16} color={C.red} /></div>
-          <div style={{ ...TNUM, fontSize: 26, fontWeight: 700, marginTop: 10, color: C.red }}>{inrShort(kpis.itc_at_risk)}</div>
+          <div style={{ ...TNUM, fontSize: 26, fontWeight: 700, marginTop: 10, color: C.red }}>{inrShort(client.risk)}</div>
         </Card>
-        {stat("Vendors flagged", String(kpis.vendors_flagged), C.navy, Users)}
+        {stat("Vendors flagged", "7", C.navy, Users)}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1.7fr 1fr", gap: 16 }}>
         <Card>
@@ -489,8 +427,8 @@ function ClientDashboard({ client, go }) {
               {["Tax period", "Status", "Invoices", "Matched %", "ITC at risk (\u20B9)", "Created", ""].map((h, i) => <th key={i} style={{ textAlign: i >= 2 && i <= 4 ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "8px 14px" }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {clientRuns.map((r, i) => (
-                <tr key={r.id} onClick={() => go("reconciliation")} style={{ cursor: "pointer", borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
+              {CLIENT_RUNS.map((r, i) => (
+                <tr key={r.period} onClick={() => go("reconciliation")} style={{ cursor: "pointer", borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
                   <td style={{ padding: "9px 14px", fontWeight: 600 }}>{r.period}</td>
                   <td style={{ padding: "9px 14px" }}>{runStatusChip(r.status)}</td>
                   <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right" }}>{r.invoices}</td>
@@ -500,13 +438,12 @@ function ClientDashboard({ client, go }) {
                   <td style={{ padding: "9px 14px", textAlign: "right" }}><ChevronRight size={16} color={C.textFaint} /></td>
                 </tr>
               ))}
-              {clientRuns.length === 0 && <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: C.textMute }}>No recent runs for this client.</td></tr>}
             </tbody>
           </table>
         </Card>
         <Card>
           <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontSize: 15, fontWeight: 700 }}>Action needed</div>
-          {attention.map((a, i) => (
+          {[{ dot: C.amber, t: "32 probable matches to review", s: "Apr 2026", go: "review" }, { dot: C.red, t: inr(850000) + " missing in portal", s: "Apr 2026", go: "reconciliation" }, { dot: C.slate, t: "5 invoices missing in books", s: "Apr 2026", go: "reconciliation" }].map((a, i) => (
             <button key={i} onClick={() => go(a.go)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 11, padding: "13px 16px", borderTop: i ? `1px solid ${C.borderLite}` : "none", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
               <span style={{ width: 8, height: 8, borderRadius: 999, background: a.dot, flexShrink: 0 }} />
               <span style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600 }}>{a.t}</div><div style={{ fontSize: 11.5, color: C.textMute }}>{a.s}</div></span>
@@ -522,145 +459,110 @@ function ClientDashboard({ client, go }) {
 /* ============================================================
    PAGE — Clients portfolio
    ============================================================ */
-/* ============================================================
-   MODAL — Add Client
-   ============================================================ */
-const INDIAN_STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal","Delhi","Jammu & Kashmir","Ladakh","Puducherry","Chandigarh"];
-
-function AddClientModal({ onClose, onAdded }) {
-  const [legalName, setLegalName] = useState("");
-  const [gstin, setGstin] = useState("");
-  const [state, setState] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const gstinValid = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin.trim().toUpperCase());
-  const ready = legalName.trim().length >= 2 && gstinValid && state;
-  const inp = (val, set, placeholder, mono) => <input value={val} onChange={e => set(e.target.value)} placeholder={placeholder} style={{ ...mono ? TNUM : {}, marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, boxSizing: "border-box", outline: "none" }} />;
-  const submit = async (e) => {
-    e.preventDefault();
-    setBusy(true); setErr("");
-    try {
-      await addClient({ legalName: legalName.trim(), gstin: gstin.trim().toUpperCase(), stateCode: state });
-      onAdded();
-    } catch (ex) { setErr(ex.message); }
-    finally { setBusy(false); }
-  };
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.35)" }} />
-      <div style={{ position: "relative", width: 480, background: "#fff", borderRadius: 12, boxShadow: "0 16px 48px rgba(20,40,70,.18)", overflow: "hidden" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px", borderBottom: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>Add client</div>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: C.textMute }}><X size={20} /></button>
-        </div>
-        <form onSubmit={submit} style={{ padding: 22 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <Label>Legal / Trade Name</Label>
-              {inp(legalName, setLegalName, "e.g. Acme Corp Pvt Ltd", false)}
-            </div>
-            <div>
-              <Label>GSTIN</Label>
-              {inp(gstin, setGstin, "27AAAAA0000A1Z5", true)}
-              {gstin.length > 0 && !gstinValid && <div style={{ fontSize: 11.5, color: C.red, marginTop: 4 }}>Invalid GSTIN format</div>}
-            </div>
-            <div>
-              <Label>State</Label>
-              <select value={state} onChange={e => setState(e.target.value)} style={{ marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, boxSizing: "border-box", background: "#fff" }}>
-                <option value="">Select state…</option>
-                {INDIAN_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-          </div>
-          {err && <div style={{ marginTop: 14, padding: 10, borderRadius: 7, background: C.redBg, color: C.red, fontSize: 12.5 }}>{err}</div>}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-            <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
-            <Btn variant="primary" disabled={!ready || busy}>{busy ? "Adding…" : "Add client"}</Btn>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function DeleteClientModal({ client, onClose, onDeleted }) {
-  const [busy, setBusy] = useState(false);
-  const confirm = async () => {
-    setBusy(true);
-    try { await deleteClient(client.id); onDeleted(); }
-    catch (e) { alert("Delete failed: " + e.message); setBusy(false); }
-  };
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div onClick={onClose} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.35)" }} />
-      <div style={{ position: "relative", width: 440, background: "#fff", borderRadius: 12, boxShadow: "0 16px 48px rgba(20,40,70,.18)", padding: 28 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 8, background: C.redBg, display: "grid", placeItems: "center", flexShrink: 0 }}><Trash2 size={20} color={C.red} /></div>
-          <div style={{ fontSize: 17, fontWeight: 700 }}>Delete client?</div>
-        </div>
-        <div style={{ fontSize: 13.5, color: C.textMute, marginBottom: 22, lineHeight: 1.6 }}>
-          <b style={{ color: C.text }}>{client.name}</b> and all its reconciliation runs, invoices, and match data will be permanently removed. This cannot be undone.
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <Btn onClick={onClose} disabled={busy}>Cancel</Btn>
-          <Btn variant="danger" icon={Trash2} onClick={confirm} disabled={busy}>{busy ? "Deleting…" : "Delete permanently"}</Btn>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ClientsPage({ clients, openClient, onClientsChanged }) {
-  const { workspace } = React.useContext(AppContext);
-  const WORKSPACE = workspace || { name: "Loading...", type: "ca_firm" };
+function ClientsPage({ clients, openClient, loading, err, onChanged }) {
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [form, setForm] = useState({ legal_name: "", gstin: "", state_code: "" });
+  const [busy, setBusy] = useState(false);
+  const [addErr, setAddErr] = useState("");
+  const [removingId, setRemovingId] = useState(null);
   const rows = clients.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) || c.gstin.toLowerCase().includes(q.toLowerCase()));
   const th = (t, right) => <th style={{ textAlign: right ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase", color: C.textMute, padding: "10px 14px", whiteSpace: "nowrap" }}>{t}</th>;
-  const isSolo = WORKSPACE.type === "solo_ca";
-  const pageTitle = isSolo ? "My clients" : "Clients";
+
+  const submitAdd = async () => {
+    setAddErr(""); setBusy(true);
+    try {
+      await createClient({ legal_name: form.legal_name, gstin: form.gstin, state_code: form.state_code });
+      setShowAdd(false); setForm({ legal_name: "", gstin: "", state_code: "" });
+      onChanged && onChanged();
+    } catch (e) { setAddErr(e.message); } finally { setBusy(false); }
+  };
+  const removeClient = async (e, c) => {
+    e.stopPropagation();
+    if (!window.confirm(`Remove ${c.name}? This deletes its runs and data.`)) return;
+    setRemovingId(c.id);
+    try { await deleteClient(c.id); onChanged && onChanged(); }
+    catch (err2) { window.alert(err2.message); }
+    finally { setRemovingId(null); }
+  };
+
   return (
     <div>
-      {showAdd && <AddClientModal onClose={() => setShowAdd(false)} onAdded={() => { setShowAdd(false); onClientsChanged(); }} />}
-      {deleteTarget && <DeleteClientModal client={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={() => { setDeleteTarget(null); onClientsChanged(); }} />}
-      <PageHead title={pageTitle} subtitle={`${clients.length} client companies in ${WORKSPACE.name}`}
-        right={<Btn variant="primary" icon={Plus} onClick={() => setShowAdd(true)}>Add client</Btn>} />
+      <PageHead title="Companies" subtitle={`${clients.length} ${clients.length === 1 ? "company" : "companies"} in ${WORKSPACE.name}`}
+        right={<Btn variant="primary" icon={Plus} onClick={() => setShowAdd(true)}>Add company</Btn>} />
       <Card>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: `1px solid ${C.border}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px", width: 280 }}>
             <Search size={15} color={C.textFaint} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search client or GSTIN…" style={{ border: "none", outline: "none", fontSize: 13, width: "100%" }} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search company or GSTIN…" style={{ border: "none", outline: "none", fontSize: 13, width: "100%" }} />
           </div>
           <Btn icon={Filter} style={{ height: 32 }}>Filter</Btn>
         </div>
-        <div style={{ overflow: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr style={{ background: C.inlay }}>{th("Client")}{th("GSTIN")}{th("State")}{th("Period status")}{th("Invoices", true)}{th("Matched %", true)}{th("ITC at risk (\u20B9)", true)}{th("Deadline")}{th("Assigned to")}{th("")}</tr></thead>
-            <tbody>
-              {rows.map((c, i) => (
-                <tr key={c.id} style={{ borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
-                  <td onClick={() => openClient(c.id)} style={{ padding: "11px 14px", fontWeight: 600, cursor: "pointer" }}>{c.name}</td>
-                  <td onClick={() => openClient(c.id)} style={{ ...TNUM, padding: "11px 14px", cursor: "pointer" }}>{c.gstin}</td>
-                  <td onClick={() => openClient(c.id)} style={{ padding: "11px 14px", color: C.textMute, cursor: "pointer" }}>{c.state}</td>
-                  <td onClick={() => openClient(c.id)} style={{ padding: "11px 14px", cursor: "pointer" }}>{runStatusChip(c.status)}</td>
-                  <td onClick={() => openClient(c.id)} style={{ ...TNUM, padding: "11px 14px", textAlign: "right", cursor: "pointer" }}>{c.invoices || "–"}</td>
-                  <td onClick={() => openClient(c.id)} style={{ ...TNUM, padding: "11px 14px", textAlign: "right", cursor: "pointer" }}>{c.invoices ? c.matched + "%" : "–"}</td>
-                  <td onClick={() => openClient(c.id)} style={{ ...TNUM, padding: "11px 14px", textAlign: "right", color: c.risk ? C.red : C.textMute, fontWeight: c.risk ? 600 : 400, cursor: "pointer" }}>{c.risk ? inrPlain(c.risk) : "–"}</td>
-                  <td onClick={() => openClient(c.id)} style={{ padding: "11px 14px", color: C.textMute, whiteSpace: "nowrap", cursor: "pointer" }}>{c.deadline}</td>
-                  <td onClick={() => openClient(c.id)} style={{ padding: "11px 14px", color: C.textMute, cursor: "pointer" }}>{c.assignee}</td>
-                  <td style={{ padding: "11px 14px", textAlign: "right" }}>
-                    <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, borderRadius: 4, color: C.textFaint }} title="Delete client">
-                      <Trash2 size={15} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={10} style={{ padding: 30, textAlign: "center", color: C.textMute }}>No clients found.</td></tr>}
-            </tbody>
-          </table>
-        </div>
+
+        {loading ? (
+          <div style={{ padding: 50, textAlign: "center", color: C.textMute }}><Loader2 size={22} className="spin" /><div style={{ marginTop: 8, fontSize: 13 }}>Loading companies…</div></div>
+        ) : err ? (
+          <div style={{ padding: 40, textAlign: "center" }}>
+            <div style={{ color: C.red, fontSize: 13, fontWeight: 600 }}>Couldn't load companies</div>
+            <div style={{ color: C.textMute, fontSize: 12.5, marginTop: 4 }}>{err}</div>
+            <Btn style={{ marginTop: 14 }} onClick={onChanged}>Retry</Btn>
+          </div>
+        ) : clients.length === 0 ? (
+          <div style={{ padding: 48, textAlign: "center" }}>
+            <Briefcase size={26} color={C.textFaint} />
+            <div style={{ fontSize: 15, fontWeight: 700, marginTop: 10 }}>No companies yet</div>
+            <div style={{ fontSize: 13, color: C.textMute, marginTop: 4 }}>Add your first client company to start reconciling.</div>
+            <Btn variant="primary" icon={Plus} style={{ marginTop: 16 }} onClick={() => setShowAdd(true)}>Add company</Btn>
+          </div>
+        ) : (
+          <div style={{ overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead><tr style={{ background: C.inlay }}>{th("Company")}{th("GSTIN")}{th("State")}{th("Period status")}{th("Invoices", true)}{th("Matched %", true)}{th("ITC at risk (\u20B9)", true)}{th("Deadline")}{th("")}</tr></thead>
+              <tbody>
+                {rows.map((c, i) => (
+                  <tr key={c.id} onClick={() => openClient(c.id)} style={{ cursor: "pointer", borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
+                    <td style={{ padding: "11px 14px", fontWeight: 600 }}>{c.name}</td>
+                    <td style={{ ...TNUM, padding: "11px 14px" }}>{c.gstin}</td>
+                    <td style={{ padding: "11px 14px", color: C.textMute }}>{c.state}</td>
+                    <td style={{ padding: "11px 14px" }}>{runStatusChip(c.status)}</td>
+                    <td style={{ ...TNUM, padding: "11px 14px", textAlign: "right" }}>{c.invoices || "–"}</td>
+                    <td style={{ ...TNUM, padding: "11px 14px", textAlign: "right" }}>{c.invoices ? c.matched + "%" : "–"}</td>
+                    <td style={{ ...TNUM, padding: "11px 14px", textAlign: "right", color: c.risk ? C.red : C.textMute, fontWeight: c.risk ? 600 : 400 }}>{c.risk ? inrPlain(c.risk) : "–"}</td>
+                    <td style={{ padding: "11px 14px", color: C.textMute, whiteSpace: "nowrap" }}>{c.deadline}</td>
+                    <td style={{ padding: "11px 14px", textAlign: "right", whiteSpace: "nowrap" }}>
+                      <button title="Remove" onClick={(e) => removeClient(e, c)} style={{ background: "none", border: "none", cursor: "pointer", color: C.textFaint, verticalAlign: "middle" }}>
+                        {removingId === c.id ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {rows.length === 0 && <tr><td colSpan={9} style={{ padding: 30, textAlign: "center", color: C.textMute }}>No companies match your search.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
+
+      {showAdd && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,40,70,.35)", display: "grid", placeItems: "center", zIndex: 60 }} onClick={() => !busy && setShowAdd(false)}>
+          <Card style={{ width: 420, padding: 22 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Add company</div>
+            <div style={{ fontSize: 12.5, color: C.textMute, marginBottom: 16 }}>Create a new client company in {WORKSPACE.name}.</div>
+            {addErr && <div style={{ background: C.redBg, color: C.red, border: "1px solid #F1C9C4", borderRadius: 8, padding: "9px 12px", fontSize: 12.5, marginBottom: 12 }}>{addErr}</div>}
+            {[["Legal name", "legal_name", "Acme Corp Pvt Ltd"], ["GSTIN", "gstin", "27AAAAA0000A1Z5"], ["State code", "state_code", "27"]].map(([label, key, ph]) => (
+              <label key={key} style={{ display: "block", marginBottom: 12 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.textMute }}>{label}</span>
+                <input value={form[key]} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} placeholder={ph}
+                  style={{ ...TNUM, width: "100%", height: 38, marginTop: 5, border: `1px solid ${C.border}`, borderRadius: 7, padding: "0 12px", fontSize: 13.5, outline: "none", boxSizing: "border-box" }} />
+              </label>
+            ))}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+              <Btn onClick={() => setShowAdd(false)} disabled={busy}>Cancel</Btn>
+              <Btn variant="primary" icon={busy ? Loader2 : Plus} disabled={busy || !form.legal_name || !form.gstin || !form.state_code} onClick={submitAdd}>{busy ? "Adding…" : "Add company"}</Btn>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
@@ -669,10 +571,6 @@ function ClientsPage({ clients, openClient, onClientsChanged }) {
    PAGE — Reconciliation results (client-scoped)
    ============================================================ */
 function Reconciliation({ client, go, live }) {
-  const { summary, invoices, itcAtRisk } = React.useContext(AppContext);
-  const SUMMARY = summary || [];
-  const INVOICES = invoices || [];
-  const ITC_AT_RISK = itcAtRisk || 0;
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
   // KPI cards: live counts (from a real backend run) override the mock totals.
@@ -825,21 +723,17 @@ function NewRun({ client, go, onReconciled }) {
   const ready = pr && two && !busy;
 
   const onFile = (setter) => (e) => {
-    e.preventDefault();
-    const f = e.target.files?.[0] || e.dataTransfer?.files?.[0];
+    const f = e.target.files?.[0];
     if (f) setter({ file: f, name: f.name, size: humanSize(f.size) });
-    if (e.target.value) e.target.value = ""; // allow re-selecting the same file
+    e.target.value = ""; // allow re-selecting the same file
   };
 
   const start = async () => {
     setErr("");
     setBusy(true);
     try {
-      const res = await reconcile(pr.file, two.file);
-      const runId = res.run_id;
-      const resultsData = await getRunResults(runId);
-      const rows = resultsData.database_rows || [];
-      onReconciled({ runId, rows, counts: summarize(rows), total: res.total_records_committed || rows.length });
+      const { runId, rows, total } = await reconcile(pr.file, two.file);
+      onReconciled({ runId, rows, counts: summarize(rows), total });
     } catch (e) {
       setErr(
         "Could not reach the reconciliation API. Make sure the backend is running on " +
@@ -864,11 +758,8 @@ function NewRun({ client, go, onReconciled }) {
     </div>
   );
 
-  const Dropzone = ({ kind, onPick, onDrop }) => (
-    <div 
-      onDragOver={(e) => e.preventDefault()} 
-      onDrop={onDrop}
-      style={{ border: `1.5px dashed ${C.border}`, borderRadius: 8, padding: "28px 16px", textAlign: "center", background: C.inlay }}>
+  const Dropzone = ({ kind, onPick }) => (
+    <div style={{ border: `1.5px dashed ${C.border}`, borderRadius: 8, padding: "28px 16px", textAlign: "center", background: C.inlay }}>
       <div style={{ width: 44, height: 44, borderRadius: 999, background: "#fff", border: `1px solid ${C.border}`, display: "grid", placeItems: "center", margin: "0 auto 10px" }}><UploadCloud size={20} color={C.textMute} /></div>
       <div style={{ fontSize: 13.5, fontWeight: 600 }}>Choose a CSV file</div>
       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint, margin: "4px 0 12px", textTransform: "uppercase" }}>Supported: CSV</div>
@@ -903,11 +794,11 @@ function NewRun({ client, go, onReconciled }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>Purchase Register</span><Chip label="Required" fg={C.textMute} bg={C.slateBg} dot={false} /></div>
-              {pr ? <FileRow f={pr} onRemove={() => setPr(null)} /> : <Dropzone kind="PR" onPick={() => prRef.current?.click()} onDrop={onFile(setPr)} />}
+              {pr ? <FileRow f={pr} onRemove={() => setPr(null)} /> : <Dropzone kind="PR" onPick={() => prRef.current?.click()} />}
             </div>
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}><span style={{ fontSize: 13.5, fontWeight: 600 }}>GSTR-2B</span><Chip label="Required" fg={C.textMute} bg={C.slateBg} dot={false} /></div>
-              {two ? <FileRow f={two} onRemove={() => setTwo(null)} /> : <Dropzone kind="2B" onPick={() => twoRef.current?.click()} onDrop={onFile(setTwo)} />}
+              {two ? <FileRow f={two} onRemove={() => setTwo(null)} /> : <Dropzone kind="2B" onPick={() => twoRef.current?.click()} />}
             </div>
           </div>
           {err && <div style={{ marginTop: 16, padding: 12, borderRadius: 8, background: C.redBg, border: `1px solid #F1C9C4`, color: C.red, fontSize: 12.5 }}>{err}</div>}
@@ -925,25 +816,12 @@ function NewRun({ client, go, onReconciled }) {
    PAGE — Review (client-scoped)
    ============================================================ */
 function Review({ client, go }) {
-  const { probable } = React.useContext(AppContext);
-  const PROBABLE = probable || [];
   const [idx, setIdx] = useState(0);
-  const [reviewed, setReviewed] = useState(0);
+  const [reviewed, setReviewed] = useState(12);
+  const total = 32;
   const queue = PROBABLE;
   const cur = queue[idx];
-  const total = queue.length;
   const next = () => { setReviewed((r) => Math.min(total, r + 1)); setIdx((i) => (i + 1) % queue.length); };
-
-  const handleDecision = async (status, overrideBucket) => {
-    if (!cur) return;
-    try {
-      await submitReviewMatch(null, cur.id, { status, overrideBucket });
-      next();
-    } catch (e) {
-      alert("Failed to submit review: " + e.message);
-    }
-  };
-
   const Side = ({ title, tag, tagColor, gstin, name, inv }) => (
     <div style={{ flex: 1 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingBottom: 12, borderBottom: `1px solid ${C.border}`, marginBottom: 14 }}>
@@ -963,18 +841,6 @@ function Review({ client, go }) {
       </div>
     </div>
   );
-
-  if (!cur) {
-    return (
-      <div>
-        <PageHead title="Review probable matches" subtitle={`${client.name} · No matches to review`} />
-        <Card style={{ padding: 40, textAlign: "center", color: C.textMute }}>
-          All caught up! No probable matches remaining for review.
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div>
       <PageHead title="Review probable matches" subtitle={`${client.name} · Apr 2026 · ${reviewed} of ${total} reviewed`}
@@ -988,9 +854,7 @@ function Review({ client, go }) {
             <Side title="GSTR-2B" tag="Portal" tagColor={C.amber} gstin={cur.gstin} name={cur.name} inv={cur.twoInv} />
           </div>
           <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 26, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-            <Btn onClick={next}>Skip</Btn>
-            <Btn variant="danger" icon={X} onClick={() => handleDecision("rejected", "Mismatched")}>Reject</Btn>
-            <Btn variant="success" icon={Check} onClick={() => handleDecision("confirmed", "Matched")}>Confirm match</Btn>
+            <Btn onClick={next}>Skip</Btn><Btn variant="danger" icon={X} onClick={next}>Reject</Btn><Btn variant="success" icon={Check} onClick={next}>Confirm match</Btn>
           </div>
         </Card>
         <Card>
@@ -1013,31 +877,14 @@ function Review({ client, go }) {
    PAGE — Reports (client-scoped)
    ============================================================ */
 function Reports({ client }) {
-  const { clientRuns } = React.useContext(AppContext);
   const reports = [
-    { t: "Invoice-level reconciliation statement", d: "Every variance between books and portal, ready for ASMT-10.", fmt: "XLSX · PDF", type: "invoice_level" },
-    { t: "Safe-to-claim summary (GSTR-3B)", d: "Matched + eligible ITC cleared for the 3B draft.", fmt: "XLSX", type: "safe_to_claim" },
-    { t: "Discrepancy notices (per vendor)", d: "Mismatched and missing-in-portal invoices, grouped by supplier.", fmt: "PDF", type: "vendor_discrepancies" },
-    { t: "ITC at risk — ageing", d: "Unmatched credit by ageing bucket against Section 16(4).", fmt: "XLSX · PDF", type: "ageing" },
-    { t: "Vendor compliance scorecard", d: "Filing reliability and defaulted value by vendor.", fmt: "XLSX", type: "vendor_scorecard" },
-    { t: "Annual reconciliation ledger (GSTR-9/9C)", d: "Monthly runs rolled up for the annual return.", fmt: "XLSX", type: "annual_ledger" },
+    { t: "Invoice-level reconciliation statement", d: "Every variance between books and portal, ready for ASMT-10.", fmt: "XLSX · PDF" },
+    { t: "Safe-to-claim summary (GSTR-3B)", d: "Matched + eligible ITC cleared for the 3B draft.", fmt: "XLSX" },
+    { t: "Discrepancy notices (per vendor)", d: "Mismatched and missing-in-portal invoices, grouped by supplier.", fmt: "PDF" },
+    { t: "ITC at risk — ageing", d: "Unmatched credit by ageing bucket against Section 16(4).", fmt: "XLSX · PDF" },
+    { t: "Vendor compliance scorecard", d: "Filing reliability and defaulted value by vendor.", fmt: "XLSX" },
+    { t: "Annual reconciliation ledger (GSTR-9/9C)", d: "Monthly runs rolled up for the annual return.", fmt: "XLSX" },
   ];
-
-  const handleGenerate = async (type) => {
-    const runId = clientRuns[0]?.id;
-    if (!runId) return alert("Please run a reconciliation first to generate reports.");
-    try {
-      const res = await downloadReport(runId, type);
-      if (res.url) {
-        window.open(res.url, "_blank");
-      } else {
-        alert("Failed to generate report");
-      }
-    } catch (e) {
-      alert("Error generating report: " + e.message);
-    }
-  };
-
   return (
     <div>
       <PageHead title="Reports" subtitle={`${client.name} · ${client.gstin} · Apr 2026`} />
@@ -1048,7 +895,7 @@ function Reports({ client }) {
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 14, fontWeight: 700 }}>{r.t}</div>
               <div style={{ fontSize: 12.5, color: C.textMute, margin: "4px 0 12px", lineHeight: 1.45 }}>{r.d}</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint }}>{r.fmt}</span><Btn icon={Download} onClick={() => handleGenerate(r.type)} style={{ height: 30 }}>Generate</Btn></div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}><span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint }}>{r.fmt}</span><Btn icon={Download} style={{ height: 30 }}>Generate</Btn></div>
             </div>
           </Card>
         ))}
@@ -1117,111 +964,33 @@ function Settings({ client }) {
 }
 
 function PracticeProfile() {
-  const { workspace } = React.useContext(AppContext);
-  const [name, setName] = useState(workspace?.name || "");
-  const [type, setType] = useState(workspace?.type || "");
-  const [busy, setBusy] = useState(false);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      await updateWorkspace({ name, type });
-      alert("Practice profile updated successfully!");
-    } catch (e) {
-      alert("Failed: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <SectionTitle>Practice profile</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div><Label>Firm name</Label><input value={name} onChange={e => setName(e.target.value)} style={{ ...TNUM, marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, background: "#fff", color: C.text, boxSizing: "border-box" }} /></div>
-        <div><Label>Account type</Label><input value={type} onChange={e => setType(e.target.value)} style={{ ...TNUM, marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, background: "#fff", color: C.text, boxSizing: "border-box" }} /></div>
-        <Field label="Primary contact" value="Amit Jain" readOnly />
-        <Field label="Contact email" value="amit@caassociates.in" readOnly />
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-        <Btn variant="primary" disabled={busy} onClick={save}>Save changes</Btn>
-      </div>
-    </div>
-  );
+  return <div><SectionTitle>Practice profile</SectionTitle>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <Field label="Firm name" value="Sharma & Associates" />
+      <Field label="Account type" value="CA Firm" readOnly />
+      <Field label="Primary contact" value="Amit Jain" />
+      <Field label="Contact email" value="amit@caassociates.in" />
+      <Field label="Firm PAN" value="AAAFS1234K" />
+      <Field label="Membership no. (ICAI)" value="123456" />
+    </div><SaveBar /></div>;
 }
-
 function TeamRoles() {
-  const [users, setUsers] = useState([]);
-  
-  const { workspace } = React.useContext(AppContext);
-  const isSolo = workspace?.type === "solo_ca";
-
-  useEffect(() => {
-    getWorkspaceUsers().then(res => setUsers(res)).catch(() => {});
-  }, []);
-
-  const handleInvite = async () => {
-    const email = prompt("Enter email of the team member to invite:");
-    if (!email) return;
-    const fullName = prompt("Enter full name:");
-    if (!fullName) return;
-    try {
-      await inviteUser({ fullName, email, role: "admin" });
-      const fresh = await getWorkspaceUsers();
-      setUsers(fresh);
-      alert("User invited successfully!");
-    } catch (e) {
-      alert("Invitation failed: " + e.message);
-    }
-  };
-
-  if (isSolo) {
-    return (
-      <div>
-        <SectionTitle>Team & roles</SectionTitle>
-        <div style={{ padding: "20px 0", display: "flex", gap: 14, alignItems: "flex-start" }}>
-          <div style={{ width: 40, height: 40, borderRadius: 8, background: "#EDE9FE", display: "grid", placeItems: "center", flexShrink: 0 }}>
-            <Users size={20} color="#5B4FCF" />
-          </div>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Solo account</div>
-            <div style={{ fontSize: 13, color: C.textMute, marginTop: 4, lineHeight: 1.6 }}>Team collaboration is available on CA Firm accounts. Upgrade your plan to invite colleagues, assign roles, and manage client access.</div>
-            <Btn variant="primary" style={{ marginTop: 12 }}>Upgrade to CA Firm</Btn>
-          </div>
-        </div>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead><tr style={{ background: C.inlay, color: C.textMute }}>{["Name", "Email", "Role"].map((h, i) => <th key={i} style={{ textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "9px 12px" }}>{h}</th>)}</tr></thead>
-          <tbody>{users.map((u, i) => (
-            <tr key={u.id} style={{ borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
-              <td style={{ padding: "10px 12px", fontWeight: 600 }}>{u.name}</td>
-              <td style={{ padding: "10px 12px", color: C.textMute }}>{u.email}</td>
-              <td style={{ padding: "10px 12px" }}><Chip label={u.role || "Admin"} fg={C.navy} bg="#EAF2FB" dot={false} /></td>
-            </tr>))}</tbody>
-        </table>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <SectionTitle>Team & roles</SectionTitle>
-        <Btn variant="primary" icon={Plus} onClick={handleInvite} style={{ height: 32 }}>Invite member</Btn>
-      </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead><tr style={{ background: C.inlay, color: C.textMute }}>{["Name", "Email", "Role", "Client access"].map((h, i) => <th key={i} style={{ textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "9px 12px" }}>{h}</th>)}</tr></thead>
-        <tbody>{users.map((u, i) => (
-          <tr key={u.id} style={{ borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
-            <td style={{ padding: "10px 12px", fontWeight: 600 }}>{u.name}</td>
-            <td style={{ padding: "10px 12px", color: C.textMute }}>{u.email}</td>
-            <td style={{ padding: "10px 12px" }}><Chip label={u.role || "Admin"} fg={C.navy} bg="#EAF2FB" dot={false} /></td>
-            <td style={{ padding: "10px 12px", color: C.textMute }}>All clients</td>
-          </tr>))}</tbody>
-      </table>
-    </div>
-  );
+  const users = [{ n: "Amit Jain", e: "amit@caassociates.in", r: "Admin", c: "All clients" }, { n: "Priya Nair", e: "priya@caassociates.in", r: "Reviewer", c: "4 clients" }, { n: "Rahul Mehta", e: "rahul@caassociates.in", r: "Analyst", c: "2 clients" }];
+  return <div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}><SectionTitle>Team & roles</SectionTitle><Btn variant="primary" icon={Plus} style={{ height: 32 }}>Invite member</Btn></div>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <thead><tr style={{ background: C.inlay, color: C.textMute }}>{["Name", "Email", "Role", "Client access", ""].map((h, i) => <th key={i} style={{ textAlign: "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "9px 12px" }}>{h}</th>)}</tr></thead>
+      <tbody>{users.map((u, i) => (
+        <tr key={u.e} style={{ borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
+          <td style={{ padding: "10px 12px", fontWeight: 600 }}>{u.n}</td><td style={{ padding: "10px 12px", color: C.textMute }}>{u.e}</td>
+          <td style={{ padding: "10px 12px" }}><Chip label={u.r} fg={C.navy} bg="#EAF2FB" dot={false} /></td>
+          <td style={{ padding: "10px 12px", color: C.textMute }}>{u.c}</td>
+          <td style={{ padding: "10px 12px", textAlign: "right" }}><button style={{ color: C.blue, background: "none", border: "none", fontWeight: 600, cursor: "pointer", fontSize: 12.5 }}>Edit</button></td>
+        </tr>))}</tbody>
+    </table>
+    <div style={{ marginTop: 14, fontSize: 12.5, color: C.textMute }}>Client access is governed by <b>client_membership</b> — assign each member only the clients they should see.</div>
+  </div>;
 }
-
 function Billing() {
   return <div><SectionTitle>Plan & billing</SectionTitle>
     <Card style={{ padding: 16, marginBottom: 16, background: C.inlay }}>
@@ -1234,124 +1003,45 @@ function Billing() {
       <Field label="Clients used" value="6 of 25" readOnly /><Field label="Billing email" value="accounts@caassociates.in" />
     </div></div>;
 }
-
 function ClientDetails({ client }) {
-  const [legalName, setLegalName] = useState(client?.name || "");
-  const [stateCode, setStateCode] = useState(client?.state || "");
-  const [busy, setBusy] = useState(false);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      await updateClient(client.id, { legalName, gstin: client.gstin, stateCode });
-      alert("Client details updated successfully!");
-    } catch (e) {
-      alert("Failed: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <SectionTitle>Client details — {client.name}</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <div><Label>Legal name</Label><input value={legalName} onChange={e => setLegalName(e.target.value)} style={{ ...TNUM, marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, background: "#fff", color: C.text, boxSizing: "border-box" }} /></div>
-        <Field label="GSTIN" value={client.gstin} readOnly />
-        <div><Label>State</Label><input value={stateCode} onChange={e => setStateCode(e.target.value)} style={{ ...TNUM, marginTop: 6, width: "100%", height: 38, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 12px", fontSize: 13.5, background: "#fff", color: C.text, boxSizing: "border-box" }} /></div>
-        <Field label="Filing frequency" value="Monthly" readOnly />
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-        <Btn variant="primary" disabled={busy} onClick={save}>Save changes</Btn>
-      </div>
-    </div>
-  );
+  return <div><SectionTitle>Client details — {client.name}</SectionTitle>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <Field label="Legal name" value={client.name} /><Field label="GSTIN" value={client.gstin} readOnly />
+      <Field label="State" value={client.state} /><Field label="Filing frequency" value="Monthly" />
+      <Field label="Contact email" value="finance@client.in" /><Field label="Assigned to" value={client.assignee} />
+    </div><SaveBar /></div>;
 }
-
 function Vendors() {
-  const { activeClientId } = React.useContext(AppContext);
-  const [vendors, setVendors] = useState([]);
-
-  useEffect(() => {
-    if (activeClientId) {
-      getClientVendors(activeClientId).then(res => setVendors(res)).catch(() => {});
-    }
-  }, [activeClientId]);
-
-  return (
-    <div>
-      <SectionTitle>Vendor master</SectionTitle>
-      <div style={{ fontSize: 13, color: C.textMute, marginBottom: 14 }}>Vendors are per client, derived from invoice GSTINs. Add contact details so discrepancy notices can be dispatched automatically.</div>
-      {vendors.map((x, i) => (
-        <div key={x.gstin} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderTop: i ? `1px solid ${C.borderLite}` : "none" }}>
-          <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600 }}>{x.name}</div><div style={{ ...TNUM, fontSize: 12, color: C.textMute }}>{x.gstin}</div></div>
-          <Chip label={x.status} fg={x.color === "green" ? C.green : C.amber} bg={x.color === "green" ? C.greenBg : C.amberBg} dot={false} />
-        </div>
-      ))}
-      {vendors.length === 0 && <div style={{ padding: 20, textAlign: "center", color: C.textMute }}>No vendors found. Try running a reconciliation first.</div>}
-    </div>
-  );
+  const v = [{ n: "Reliance Industries Ltd.", g: "27AAACR1234F1Z5", s: "Reliable", c: C.green, bg: C.greenBg }, { n: "Infosys Limited", g: "29AAACI1234F1Z5", s: "Frequent defaults", c: C.amber, bg: C.amberBg }, { n: "TechServe Pvt Ltd", g: "27TECHS1234F1Z5", s: "Inactive", c: C.slate, bg: C.slateBg }];
+  return <div><SectionTitle>Vendor master</SectionTitle>
+    <div style={{ fontSize: 13, color: C.textMute, marginBottom: 14 }}>Vendors are per client, derived from invoice GSTINs. Add contact details so discrepancy notices can be dispatched automatically.</div>
+    {v.map((x, i) => (
+      <div key={x.g} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderTop: i ? `1px solid ${C.borderLite}` : "none" }}>
+        <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600 }}>{x.n}</div><div style={{ ...TNUM, fontSize: 12, color: C.textMute }}>{x.g}</div></div>
+        <Chip label={x.s} fg={x.c} bg={x.bg} dot={false} /><button style={{ color: C.blue, background: "none", border: "none", fontWeight: 600, cursor: "pointer", fontSize: 12.5 }}>Manage</button>
+      </div>))}
+  </div>;
 }
-
 function MatchingRules({ scope, client }) {
-  const [tolerance, setTolerance] = useState("1.00");
-  const [window, setWindow] = useState("2");
-  const [threshold, setThreshold] = useState("80");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const res = scope === "practice" ? await getWorkspaceSettings() : await getClientSettings(client.id);
-        setTolerance(String(res.tax_tolerance));
-        setWindow(String(res.date_window_days));
-        setThreshold(String(res.fuzzy_threshold));
-      } catch (e) {}
-    };
-    loadSettings();
-  }, [scope, client]);
-
-  const save = async () => {
-    setBusy(true);
-    try {
-      const payload = {
-        tax_tolerance: parseFloat(tolerance),
-        date_window_days: parseFloat(window),
-        fuzzy_threshold: parseFloat(threshold)
-      };
-      if (scope === "practice") {
-        await updateWorkspaceSettings(payload);
-      } else {
-        await updateClientSettings(client.id, payload);
-      }
-      alert("Matching rules saved successfully!");
-    } catch (e) {
-      alert("Failed: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const row = (title, desc, control) => (
     <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 0", borderTop: `1px solid ${C.borderLite}` }}>
       <div style={{ flex: 1 }}><div style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</div><div style={{ fontSize: 12.5, color: C.textMute, marginTop: 2 }}>{desc}</div></div>{control}
+    </div>);
+  const num = (val, suffix) => <div style={{ display: "flex", alignItems: "center", gap: 6 }}><input defaultValue={val} style={{ ...TNUM, width: 70, height: 34, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 10px", fontSize: 13, textAlign: "right" }} /><span style={{ fontSize: 12.5, color: C.textMute }}>{suffix}</span></div>;
+  return <div>
+    <SectionTitle>{scope === "practice" ? "Default matching rules" : `Matching overrides — ${client.name}`}</SectionTitle>
+    <div style={{ fontSize: 13, color: C.textMute, marginBottom: 4 }}>
+      {scope === "practice"
+        ? "Firm-wide defaults applied to every new client. Individual clients can override these."
+        : "Overrides for this client only. Leave as default to inherit the firm-wide rules."}
     </div>
-  );
-
-  return (
-    <div>
-      <SectionTitle>{scope === "practice" ? "Default matching rules" : `Matching overrides — ${client.name}`}</SectionTitle>
-      <div style={{ fontSize: 13, color: C.textMute, marginBottom: 4 }}>
-        {scope === "practice" ? "Firm-wide defaults applied to every new client." : "Overrides for this client only."}
-      </div>
-      {row("Tax tolerance", "Treat as matched if tax differs by at most this amount.", <div style={{ display: "flex", alignItems: "center", gap: 6 }}><input value={tolerance} onChange={e => setTolerance(e.target.value)} style={{ ...TNUM, width: 70, height: 34, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 10px", fontSize: 13, textAlign: "right" }} /><span style={{ fontSize: 12.5, color: C.textMute }}>₹</span></div>)}
-      {row("Date window", "Allow invoice dates to differ by up to this many days.", <div style={{ display: "flex", alignItems: "center", gap: 6 }}><input value={window} onChange={e => setWindow(e.target.value)} style={{ ...TNUM, width: 70, height: 34, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 10px", fontSize: 13, textAlign: "right" }} /><span style={{ fontSize: 12.5, color: C.textMute }}>days</span></div>)}
-      {row("Fuzzy confidence threshold", "Minimum score for an invoice to surface as a probable match.", <div style={{ display: "flex", alignItems: "center", gap: 6 }}><input value={threshold} onChange={e => setThreshold(e.target.value)} style={{ ...TNUM, width: 70, height: 34, border: `1px solid ${C.border}`, borderRadius: 6, padding: "0 10px", fontSize: 13, textAlign: "right" }} /><span style={{ fontSize: 12.5, color: C.textMute }}>%</span></div>)}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
-        <Btn variant="primary" disabled={busy} onClick={save}>Save changes</Btn>
-      </div>
-    </div>
-  );
+    {row("Tax tolerance", "Treat as matched if tax differs by at most this amount.", num("1.00", "\u20B9"))}
+    {row("Date window", "Allow invoice dates to differ by up to this many days.", num("0", "days"))}
+    {row("Fuzzy confidence threshold", "Minimum score for an invoice to surface as a probable match.", num("70", "%"))}
+    {row("Pass 2 — normalized invoice no.", "Strip delimiters & leading zeros before comparing.", <Toggle on />)}
+    {row("Pass 4 — fuzzy text", "Proximity matching on supplier name + invoice no.", <Toggle on />)}
+    <SaveBar />
+  </div>;
 }
 function Notify() {
   const row = (title, desc, on) => (
@@ -1367,253 +1057,60 @@ function Notify() {
   </div>;
 }
 
-
-/* ============================================================
-   AUTH: Login & Register screen with OTP
-   ============================================================ */
-function AuthScreen({ onAuthSuccess }) {
-  const [isRegister, setIsRegister] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [workspaceName, setWorkspaceName] = useState("");
-  const [workspaceType, setWorkspaceType] = useState("ca_firm");
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSendOtp = async (e) => {
-    e.preventDefault();
-    if (!email) return setError("Email is required");
-    setError("");
-    setLoading(true);
-    try {
-      await requestOtp(email);
-      setOtpSent(true);
-    } catch (err) {
-      setError(err.message || "Failed to send OTP");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      let res;
-      if (isRegister) {
-        res = await register({ email, password, fullName, workspaceName, workspaceType, otp });
-      } else {
-        res = await login({ email, password, otp });
-      }
-      localStorage.setItem("token", res.access_token);
-      onAuthSuccess(res.access_token);
-    } catch (err) {
-      setError(err.message || "Authentication failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT }}>
-      <div style={{ width: 420, padding: 32, background: "#fff", borderRadius: 12, boxShadow: "0 8px 30px rgba(0,0,0,0.08)", border: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 18 }}>
-          <div style={{ width: 38, height: 38, borderRadius: 9, background: C.navy, display: "grid", placeItems: "center" }}><Landmark size={20} color="#fff" /></div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: C.navy }}>GST Reconciliation</div>
-        </div>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: C.text, marginBottom: 6, textAlign: "center" }}>
-          {isRegister ? "Create your account" : "Welcome back"}
-        </h2>
-        <p style={{ fontSize: 13, color: C.textMute, textAlign: "center", marginBottom: 22 }}>
-          {isRegister ? "Set up your workspace to get started" : "Sign in to your reconciliation workspace"}
-        </p>
-
-        {error && <div style={{ padding: "10px 12px", background: C.redBg, color: C.red, borderRadius: 6, fontSize: 13, marginBottom: 16 }}>{error}</div>}
-
-        <form onSubmit={otpSent ? handleSubmit : handleSendOtp}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Email Address</label>
-            <input disabled={otpSent} type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-          </div>
-
-          {!otpSent ? (
-            <button type="submit" disabled={loading} style={{ width: "100%", height: 40, background: C.blue, color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer" }}>
-              {loading ? "Sending..." : "Send OTP"}
-            </button>
-          ) : (
-            <>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>OTP Code (printed to console)</label>
-                <input type="text" value={otp} onChange={(e) => setOtp(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-              </div>
-              {isRegister && (
-                <>
-                  <div style={{ marginBottom: 16 }}>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Full Name</label>
-                    <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-                  </div>
-                  <div style={{ marginBottom: 16 }}>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 6 }}>Workspace / Practice Name</label>
-                    <input type="text" value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} required style={{ width: "100%", height: 38, padding: "0 12px", border: `1px solid ${C.border}`, borderRadius: 6, outline: "none", boxSizing: "border-box" }} />
-                  </div>
-                  <div style={{ marginBottom: 22 }}>
-                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 8 }}>Account type</label>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      {[{v: "ca_firm", label: "CA Firm", desc: "Team · multiple clients"}, {v: "solo_ca", label: "Solo CA", desc: "Individual · streamlined"}].map(opt => (
-                        <button key={opt.v} type="button" onClick={() => setWorkspaceType(opt.v)} style={{ padding: "10px 12px", borderRadius: 8, border: `2px solid ${workspaceType === opt.v ? C.navy : C.border}`, background: workspaceType === opt.v ? "#EAF2FB" : "#fff", cursor: "pointer", textAlign: "left" }}>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: workspaceType === opt.v ? C.navy : C.text }}>{opt.label}</div>
-                          <div style={{ fontSize: 11, color: C.textMute, marginTop: 2 }}>{opt.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-              <button type="submit" disabled={loading} style={{ width: "100%", height: 40, background: C.green, color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer" }}>
-                {loading ? "Authenticating..." : isRegister ? "Create Workspace" : "Log In"}
-              </button>
-            </>
-          )}
-        </form>
-
-        <div style={{ marginTop: 20, textAlign: "center" }}>
-          <button onClick={() => { setIsRegister(!isRegister); setOtpSent(false); setError(""); }} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>
-            {isRegister ? "Already have an account? Log In" : "Need an account? Register"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ============================================================
    ROOT
    ============================================================ */
 export default function App() {
-  const [token, setToken] = useState(localStorage.getItem("token"));
+  const { user, logout } = useAuth();
   const [page, setPage] = useState("dashboard");
   const [activeClientId, setActiveClientId] = useState(null); // null = practice view
-  const [period, setPeriod] = useState("FY 2026\u201327 \u00b7 Apr 2026");
-  const [apiOk, setApiOk] = useState(null); // null = checking, true/false = result
-  const [live, setLive] = useState(null);   // last real reconcile result
-  const [currentUser, setCurrentUser] = useState(null);
+  const [period, setPeriod] = useState("FY 2026–27 · Apr 2026");
+  const [apiOk, setApiOk] = useState(null);
+  const [live, setLive] = useState(null);
 
-  const [data, setData] = useState({
-    workspace: null,
-    clients: [],
-    clientRuns: [],
-    summary: [],
-    invoices: [],
-    probable: [],
-    itcAtRisk: 0
-  });
+  const [clients, setClients] = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
+  const [clientsErr, setClientsErr] = useState("");
 
+  const client = clients.find((c) => c.id === activeClientId) || null;
   const go = (p) => setPage(p);
-  const openClient = (id) => { setActiveClientId(id); setPage("dashboard"); };
+
+  // selecting a company sets the X-Client-Id header used by company-scoped calls
+  const chooseClient = (id) => { setActiveClientId(id); apiSetActiveClient(id); };
+  const openClient = (id) => { chooseClient(id); setPage("dashboard"); };
+
+  const loadClients = () => {
+    setClientsLoading(true); setClientsErr("");
+    listClients()
+      .then((rows) => setClients(Array.isArray(rows) ? rows : []))
+      .catch((e) => setClientsErr(e.message))
+      .finally(() => setClientsLoading(false));
+  };
 
   useEffect(() => {
     let alive = true;
     health().then(() => alive && setApiOk(true)).catch(() => alive && setApiOk(false));
+    loadClients();
     return () => { alive = false; };
   }, []);
 
-  const bootstrap = () => {
-    if (!token) return;
-    Promise.all([
-      getWorkspace().catch(() => ({ name: "CA Firm Workspace", type: "ca_firm" })),
-      getClients().catch(() => []),
-      getCurrentUser().catch(() => null)
-    ]).then(([ws, cl, me]) => {
-      setData(prev => ({ ...prev, workspace: ws, clients: cl }));
-      if (me) setCurrentUser(me);
-    });
-  };
-
-  useEffect(() => {
-    bootstrap();
-  }, [token]);
-
-  useEffect(() => {
-    if (!token) return;
-    if (activeClientId) {
-      getClientRuns(activeClientId).then((runs) => {
-        const latestRun = runs[0];
-        if (latestRun) {
-          Promise.all([
-            getRunSummary(latestRun.id).catch(() => ({ summary: [], itc_at_risk: 0 })),
-            getRunResults(latestRun.id).catch(() => ({ database_rows: [] })),
-            getRunProbable(latestRun.id).catch(() => [])
-          ]).then(([sum, inv, prob]) => {
-            setData(prev => ({
-              ...prev,
-              clientRuns: runs,
-              summary: sum.summary || [],
-              invoices: inv.database_rows || [],
-              probable: prob || [],
-              itcAtRisk: sum.itc_at_risk || 0
-            }));
-          });
-        } else {
-          setData(prev => ({
-            ...prev,
-            clientRuns: [],
-            summary: [],
-            invoices: [],
-            probable: [],
-            itcAtRisk: 0
-          }));
-        }
-      }).catch(() => {});
-    } else {
-      setData(prev => ({ ...prev, clientRuns: [], summary: [], invoices: [], probable: [], itcAtRisk: 0 }));
-    }
-  }, [activeClientId, token]);
-
   const onReconciled = (result) => { setLive(result); setPage("reconciliation"); };
-  const onClientsChanged = () => {
-    getClients().catch(() => []).then(cl => setData(prev => ({ ...prev, clients: cl })));
-  };
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    setToken(null);
-    setCurrentUser(null);
-    setData({ workspace: null, clients: [], clientRuns: [], summary: [], invoices: [], probable: [], itcAtRisk: 0 });
-    setActiveClientId(null);
-    setPage("dashboard");
-  };
-
-  if (!token) {
-    return <AuthScreen onAuthSuccess={(t) => setToken(t)} />;
-  }
-
-  const CLIENTS = data.clients || [];
-  const client = CLIENTS.find((c) => c.id === activeClientId) || null;
 
   return (
-    <AppContext.Provider value={{ ...data, activeClientId, currentUser }}>
     <div style={{ display: "flex", height: "100vh", fontFamily: FONT, color: C.text, background: C.bg, overflow: "hidden" }}>
-      <Sidebar page={page} setPage={setPage} />
+      <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <Topbar clients={CLIENTS} activeId={activeClientId} setActiveId={setActiveClientId} period={period} setPeriod={setPeriod} apiOk={apiOk} onLogout={handleLogout} setPage={setPage} />
+        <Topbar clients={clients} activeId={activeClientId} setActiveId={chooseClient} period={period} setPeriod={setPeriod} apiOk={apiOk} />
         <main style={{ flex: 1, overflow: "auto", padding: 24 }}>
-          {page === "dashboard" && (client ? <ClientDashboard client={client} go={go} /> : <PracticeDashboard clients={CLIENTS} go={go} openClient={openClient} />)}
-          {page === "clients" && <ClientsPage clients={CLIENTS} openClient={openClient} onClientsChanged={onClientsChanged} />}
-          {page === "reconciliation" && <ClientGate client={client} clients={CLIENTS} onPick={setActiveClientId}><Reconciliation client={client} go={go} live={live} /></ClientGate>}
-          {page === "new" && <ClientGate client={client} clients={CLIENTS} onPick={setActiveClientId}><NewRun client={client} go={go} onReconciled={onReconciled} /></ClientGate>}
-          {page === "review" && <ClientGate client={client} clients={CLIENTS} onPick={setActiveClientId}><Review client={client} go={go} /></ClientGate>}
-          {page === "reports" && <ClientGate client={client} clients={CLIENTS} onPick={setActiveClientId}><Reports client={client} /></ClientGate>}
+          {page === "dashboard" && (client ? <ClientDashboard client={client} go={go} /> : <PracticeDashboard clients={clients} go={go} openClient={openClient} loading={clientsLoading} err={clientsErr} />)}
+          {page === "clients" && <ClientsPage clients={clients} openClient={openClient} loading={clientsLoading} err={clientsErr} onChanged={loadClients} />}
+          {page === "reconciliation" && <ClientGate client={client} clients={clients} onPick={chooseClient}><Reconciliation client={client} go={go} live={live} /></ClientGate>}
+          {page === "new" && <ClientGate client={client} clients={clients} onPick={chooseClient}><NewRun client={client} go={go} onReconciled={onReconciled} /></ClientGate>}
+          {page === "review" && <ClientGate client={client} clients={clients} onPick={chooseClient}><Review client={client} go={go} /></ClientGate>}
+          {page === "reports" && <ClientGate client={client} clients={clients} onPick={chooseClient}><Reports client={client} /></ClientGate>}
           {page === "settings" && <Settings client={client} />}
         </main>
       </div>
     </div>
-    </AppContext.Provider>
   );
 }

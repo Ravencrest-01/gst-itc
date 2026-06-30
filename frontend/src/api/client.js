@@ -1,270 +1,67 @@
-// API client for the FastAPI backend.
+// Token-aware API client for the FastAPI backend.
 // Dev calls go through the Vite proxy (vite.config.js) -> no CORS issues.
 const BASE = import.meta.env.VITE_API_BASE ?? "";
+const TOKEN_KEY = "itc_token";
+const CLIENT_KEY = "itc_active_client";
 
-function getHeaders() {
-  const token = localStorage.getItem("token");
-  const headers = { "Content-Type": "application/json" };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
+export const getActiveClient = () => localStorage.getItem(CLIENT_KEY);
+export const setActiveClient = (id) => (id ? localStorage.setItem(CLIENT_KEY, id) : localStorage.removeItem(CLIENT_KEY));
+
+let onUnauthorized = () => {};
+export const setUnauthorizedHandler = (fn) => { onUnauthorized = fn; };
+
+async function req(path, { method = "GET", body, isForm } = {}) {
+  const headers = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const cid = getActiveClient();
+  if (cid) headers["X-Client-Id"] = cid;
+
+  let payload;
+  if (isForm) payload = body;                      // FormData: let the browser set the boundary
+  else if (body !== undefined) { headers["Content-Type"] = "application/json"; payload = JSON.stringify(body); }
+
+  const r = await fetch(`${BASE}${path}`, { method, headers, body: payload });
+
+  if (r.status === 401) { setToken(null); onUnauthorized(); throw new Error("Session expired. Please log in again."); }
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { const j = await r.json(); detail = j.detail || detail; } catch { /* non-JSON */ }
+    throw new Error(detail);
   }
-  return headers;
+  if (r.status === 204) return null;
+  const ct = r.headers.get("content-type") || "";
+  return ct.includes("application/json") ? r.json() : r.text();
 }
 
-async function handleResponse(res) {
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-  return res.json();
-}
+export const health = () =>
+  fetch(`${BASE}/healthz`).then((r) => { if (!r.ok) throw new Error("offline"); return r.json(); });
 
-// ---------------------------------------------------------
-// AUTHENTICATION & OTP
-// ---------------------------------------------------------
-export async function health() {
-  const r = await fetch(`${BASE}/healthz`);
-  return handleResponse(r);
-}
+// ---- auth ----
+export const requestOtp = (email) => req("/api/v1/auth/request-otp", { method: "POST", body: { email } });
+export const register = (data) => req("/api/v1/auth/register", { method: "POST", body: data });
+export const login = (email, password, otp) =>
+  req("/api/v1/auth/login", { method: "POST", body: { email, password, ...(otp ? { otp } : {}) } });
+export const me = () => req("/api/v1/auth/me");
 
-export async function requestOtp(email) {
-  const r = await fetch(`${BASE}/api/v1/auth/request-otp`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({ email }),
-  });
-  return handleResponse(r);
-}
+// ---- clients (companies) ----
+export const listClients = () => req("/api/v1/clients");
+export const createClient = (data) => req("/api/v1/clients", { method: "POST", body: data }); // {gstin, legal_name, state_code}
+export const deleteClient = (id) => req(`/api/v1/clients/${id}`, { method: "DELETE" });
 
-export async function register({ email, password, fullName, workspaceName, workspaceType, otp }) {
-  const r = await fetch(`${BASE}/api/v1/auth/register`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      email,
-      password,
-      full_name: fullName,
-      workspace_name: workspaceName,
-      workspace_type: workspaceType || "ca_firm",
-      otp,
-    }),
-  });
-  return handleResponse(r);
-}
-
-export async function login({ email, password, otp }) {
-  const r = await fetch(`${BASE}/api/v1/auth/login`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({ email, password, otp }),
-  });
-  return handleResponse(r);
-}
-
-export async function getCurrentUser() {
-  const r = await fetch(`${BASE}/api/v1/auth/me`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-// ---------------------------------------------------------
-// WORKSPACE & CLIENTS
-// ---------------------------------------------------------
-export async function getWorkspace() {
-  const r = await fetch(`${BASE}/api/v1/workspace`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getClients() {
-  const r = await fetch(`${BASE}/api/v1/clients`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function addClient({ legalName, gstin, stateCode }) {
-  const r = await fetch(`${BASE}/api/v1/clients`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      legal_name: legalName,
-      gstin,
-      state_code: stateCode,
-    }),
-  });
-  return handleResponse(r);
-}
-
-export async function getClientDetails(clientId) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-// ---------------------------------------------------------
-// RECONCILIATION FLOW
-// ---------------------------------------------------------
-export async function getClientRuns(clientId) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/runs`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getRunSummary(runId) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/summary`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getRunInvoices(runId) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/invoices`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getRunResults(runId) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/results`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getRunProbable(runId) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/probable`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function submitReviewMatch(runId, matchId, { status, overrideBucket }) {
-  const r = await fetch(`${BASE}/api/v1/reconcile/matches/${matchId}`, {
-    method: "PATCH",
-    headers: getHeaders(),
-    body: JSON.stringify({
-      status,
-      override_bucket: overrideBucket,
-    }),
-  });
-  return handleResponse(r);
-}
-
+// ---- reconcile (kept) ----
 export async function reconcile(prFile, twobFile) {
   const fd = new FormData();
   fd.append("purchase_register", prFile);
   fd.append("gstr_2b", twobFile);
-  
-  const token = localStorage.getItem("token");
-  const headers = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+  const summary = await req("/api/v1/reconcile", { method: "POST", body: fd, isForm: true });
+  const runId = summary.run_id ?? null;
+  let rows = [];
+  if (runId) {
+    try { const d = await req(`/api/v1/runs/${runId}/results`); rows = Array.isArray(d.database_rows) ? d.database_rows : []; }
+    catch { /* best effort */ }
   }
-
-  const r = await fetch(`${BASE}/api/v1/reconcile`, {
-    method: "POST",
-    headers,
-    body: fd,
-  });
-  return handleResponse(r);
-}
-
-export async function updateWorkspace({ name, type }) {
-  const r = await fetch(`${BASE}/api/v1/workspace`, {
-    method: "PATCH",
-    headers: getHeaders(),
-    body: JSON.stringify({ name, type }),
-  });
-  return handleResponse(r);
-}
-
-export async function inviteUser({ fullName, email, role }) {
-  const r = await fetch(`${BASE}/api/v1/users`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({ fullName, email, role }),
-  });
-  return handleResponse(r);
-}
-
-export async function getWorkspaceSettings() {
-  const r = await fetch(`${BASE}/api/v1/workspace/settings`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function updateWorkspaceSettings({ tax_tolerance, date_window_days, fuzzy_threshold }) {
-  const r = await fetch(`${BASE}/api/v1/workspace/settings`, {
-    method: "PATCH",
-    headers: getHeaders(),
-    body: JSON.stringify({ tax_tolerance, date_window_days, fuzzy_threshold }),
-  });
-  return handleResponse(r);
-}
-
-export async function getClientSettings(clientId) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/settings`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function updateClientSettings(clientId, { tax_tolerance, date_window_days, fuzzy_threshold }) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/settings`, {
-    method: "PATCH",
-    headers: getHeaders(),
-    body: JSON.stringify({ tax_tolerance, date_window_days, fuzzy_threshold }),
-  });
-  return handleResponse(r);
-}
-
-export async function getClientVendors(clientId) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}/vendors`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getDashboardKpis() {
-  const r = await fetch(`${BASE}/api/v1/dashboard/kpis`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function updateClient(clientId, { legalName, gstin, stateCode }) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
-    method: "PATCH",
-    headers: getHeaders(),
-    body: JSON.stringify({ legal_name: legalName, gstin, state_code: stateCode }),
-  });
-  return handleResponse(r);
-}
-
-export async function downloadReport(runId, reportType) {
-  const r = await fetch(`${BASE}/api/v1/runs/${runId}/reports/${reportType}`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function deleteClient(clientId) {
-  const r = await fetch(`${BASE}/api/v1/clients/${clientId}`, {
-    method: "DELETE",
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
-}
-
-export async function getWorkspaceUsers() {
-  const r = await fetch(`${BASE}/api/v1/users`, {
-    headers: getHeaders(),
-  });
-  return handleResponse(r);
+  return { runId, rows, total: summary.total_records_committed ?? rows.length };
 }

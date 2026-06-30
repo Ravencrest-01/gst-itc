@@ -95,3 +95,5 @@ export async function reconcile(prFile, twobFile) {
   }
   return { runId, rows, total: summary.total_records_committed ?? rows.length };
 }
+
+export const getRunResults = (runId) => req(`/api/v1/runs/${runId}/results`);

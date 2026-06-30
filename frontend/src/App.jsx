@@ -9,7 +9,7 @@ import {
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell,
 } from "recharts";
-import { health, reconcile, listClients, createClient, deleteClient, recentRuns, downloadReport, setActiveClient as apiSetActiveClient } from "./api/client";
+import { health, reconcile, listClients, createClient, deleteClient, recentRuns, getRunResults, downloadReport, setActiveClient as apiSetActiveClient } from "./api/client";
 import { useAuth } from "./auth/AuthContext";
 
 /* Group raw backend match rows (keyed by `bucket`) into our five buckets. */
@@ -397,6 +397,17 @@ function PracticeDashboard({ clients, go, openClient, loading, err }) {
    PAGE — Client dashboard (a client selected)
    ============================================================ */
 function ClientDashboard({ client, go }) {
+  const [runs, setRuns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    setLoading(true); setErr("");
+    recentRuns(5).then(d => {
+      setRuns(d?.runs || []);
+    }).catch(e => setErr(e.message)).finally(() => setLoading(false));
+  }, [client.id]);
+
   const stat = (label, value, color, Icon) => (
     <Card key={label} style={{ padding: 16, flex: 1 }}>
       <div style={{ display: "flex", justifyContent: "space-between" }}><Label>{label}</Label><Icon size={16} color={C.textFaint} /></div>
@@ -408,11 +419,11 @@ function ClientDashboard({ client, go }) {
       <PageHead title={client.name} subtitle={`${client.gstin} · ${client.state} · FY 2026–27`}
         right={<Btn variant="primary" icon={Plus} onClick={() => go("new")}>New reconciliation</Btn>} />
       <div style={{ display: "flex", gap: 14, marginBottom: 16 }}>
-        {stat("Open runs", "1", C.navy, LayoutDashboard)}
+        {stat("Open runs", runs.length > 0 ? "1" : "0", C.navy, LayoutDashboard)}
         {stat("ITC recovered (FY)", inrShort(2310000), C.navy, ShieldCheck)}
         <Card style={{ padding: 16, flex: 1, borderLeft: `3px solid ${C.red}` }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><Label>ITC at risk</Label><AlertTriangle size={16} color={C.red} /></div>
-          <div style={{ ...TNUM, fontSize: 26, fontWeight: 700, marginTop: 10, color: C.red }}>{inrShort(client.risk)}</div>
+          <div style={{ ...TNUM, fontSize: 26, fontWeight: 700, marginTop: 10, color: C.red }}>{inrShort(client.risk || 0)}</div>
         </Card>
         {stat("Vendors flagged", "7", C.navy, Users)}
       </div>
@@ -424,17 +435,22 @@ function ClientDashboard({ client, go }) {
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead><tr style={{ background: C.inlay, color: C.textMute }}>
-              {["Tax period", "Status", "Invoices", "Matched %", "ITC at risk (\u20B9)", "Created", ""].map((h, i) => <th key={i} style={{ textAlign: i >= 2 && i <= 4 ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "8px 14px" }}>{h}</th>)}
+              {["Tax period", "Status", "Invoices", "Matched %", "Created", ""].map((h, i) => <th key={i} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", padding: "8px 14px" }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {CLIENT_RUNS.map((r, i) => (
-                <tr key={r.period} onClick={() => go("reconciliation")} style={{ cursor: "pointer", borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
-                  <td style={{ padding: "9px 14px", fontWeight: 600 }}>{r.period}</td>
-                  <td style={{ padding: "9px 14px" }}>{runStatusChip(r.status)}</td>
-                  <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right" }}>{r.invoices}</td>
-                  <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right" }}>{r.matched}%</td>
-                  <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right", color: r.risk ? C.red : C.textMute, fontWeight: r.risk ? 600 : 400 }}>{r.risk ? inrPlain(r.risk) : "–"}</td>
-                  <td style={{ padding: "9px 14px", color: C.textMute }}>{r.created}</td>
+              {loading ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.textMute }}>Loading runs...</td></tr>
+              ) : err ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.red }}>Error: {err}</td></tr>
+              ) : runs.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: C.textMute }}>No runs yet. Click "New reconciliation" to start.</td></tr>
+              ) : runs.map((r, i) => (
+                <tr key={r.id} onClick={() => go("reconciliation")} style={{ cursor: "pointer", borderTop: `1px solid ${C.borderLite}`, background: i % 2 ? C.zebra : "#fff" }}>
+                  <td style={{ padding: "9px 14px", fontWeight: 600 }}>{r.tax_period || "Apr 2026"}</td>
+                  <td style={{ padding: "9px 14px" }}>{runStatusChip(r.status || "Completed")}</td>
+                  <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right" }}>{r.total_records_committed || "–"}</td>
+                  <td style={{ ...TNUM, padding: "9px 14px", textAlign: "right" }}>–</td>
+                  <td style={{ padding: "9px 14px", color: C.textMute }}>{new Date(r.created_at).toLocaleString()}</td>
                   <td style={{ padding: "9px 14px", textAlign: "right" }}><ChevronRight size={16} color={C.textFaint} /></td>
                 </tr>
               ))}
@@ -573,14 +589,27 @@ function ClientsPage({ clients, openClient, loading, err, onChanged }) {
 function Reconciliation({ client, go, live }) {
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
-  // KPI cards: live counts (from a real backend run) override the mock totals.
-  const cards = SUMMARY.map((s) => ({ ...s, count: live ? live.counts[s.key] : s.count, value: live ? null : s.value }));
-  const tabs = [{ key: "all", label: "All", n: live ? live.total : INVOICES.length }, ...cards.map((s) => ({ key: s.key, label: BUCKET[s.key].label, n: s.count, dot: s.key === "probable" ? C.amber : null }))];
-  const rows = useMemo(() => {
-    let r = tab === "all" ? INVOICES : INVOICES.filter((i) => i.bucket === tab);
-    if (q.trim()) { const s = q.toLowerCase(); r = r.filter((i) => i.gstin.toLowerCase().includes(s) || i.name.toLowerCase().includes(s) || i.inv.toLowerCase().includes(s)); }
-    return r;
-  }, [tab, q]);
+  const [fetchedLive, setFetchedLive] = useState(null);
+  const [loading, setLoading] = useState(!live);
+
+  useEffect(() => {
+    if (live) { setLoading(false); return; }
+    setLoading(true);
+    recentRuns(1).then(async (d) => {
+      if (d?.runs?.length > 0) {
+        const run = d.runs[0];
+        const res = await getRunResults(run.id);
+        const rows = Array.isArray(res.database_rows) ? res.database_rows : [];
+        setFetchedLive({ runId: run.id, rows, counts: summarize(rows), total: run.total_records_committed || rows.length });
+      }
+    }).catch(console.error).finally(() => setLoading(false));
+  }, [live, client.id]);
+
+  const effectiveLive = live || fetchedLive;
+
+  const cards = SUMMARY.map((s) => ({ ...s, count: effectiveLive ? effectiveLive.counts[s.key] : 0, value: null }));
+  const tabs = [{ key: "all", label: "All", n: effectiveLive ? effectiveLive.total : 0 }, ...cards.map((s) => ({ key: s.key, label: BUCKET[s.key].label, n: s.count, dot: s.key === "probable" ? C.amber : null }))];
+  
   // Real persisted MatchResult rows (live). Only match metadata is stored by the
   // backend today — supplier/amount columns need M4 to persist invoice rows.
   const bucketKey = (b) => {
@@ -593,7 +622,7 @@ function Reconciliation({ client, go, live }) {
     return "probable";
   };
   const liveRows = useMemo(() => {
-    const mapped = (live?.rows || []).map((r, i) => ({
+    const mapped = (effectiveLive?.rows || []).map((r, i) => ({
       id: i,
       bucket: bucketKey(r.bucket),
       pass: r.match_pass ?? r.matchPass ?? "—",
@@ -608,33 +637,38 @@ function Reconciliation({ client, go, live }) {
       r = r.filter((x) => String(x.prId).toLowerCase().includes(s) || String(x.twoId).toLowerCase().includes(s) || x.bucket.includes(s) || x.pass.toLowerCase().includes(s));
     }
     return r;
-  }, [tab, q, live]);
+  }, [tab, q, effectiveLive]);
   const th = (txt, right) => <th style={{ textAlign: right ? "right" : "left", fontSize: 11, fontWeight: 700, letterSpacing: ".03em", textTransform: "uppercase", color: C.textMute, padding: "10px 14px", position: "sticky", top: 0, background: C.inlay, whiteSpace: "nowrap" }}>{txt}</th>;
   return (
     <div>
       <PageHead title={`${client.name} — Apr 2026`} subtitle={`${client.gstin} · last synced Today, 09:45`}
-        right={<><Btn icon={Download} onClick={() => live ? downloadReport(live.runId, "reconciliation", "xlsx").catch((e) => alert(e.message)) : go("reports")}>Export report</Btn><Btn variant="primary" icon={Play} onClick={() => go("new")}>Run again</Btn></>} />
-      <div style={{ marginTop: -8, display: "flex", alignItems: "center", gap: 10 }}>
-        {runStatusChip(live ? "Completed" : "In progress")}
-        {live && <span style={{ ...TNUM, fontSize: 11.5, fontWeight: 700, color: C.green2, background: "#E5F3EB", padding: "2px 8px", borderRadius: 4 }}>
-          ● LIVE · {live.total} rows{live.runId ? " · run " + String(live.runId).slice(0, 8) : ""}
-        </span>}
-      </div>
-      <div style={{ display: "flex", gap: 12, margin: "16px 0" }}>
-        {cards.map((s) => (
-          <Card key={s.key} style={{ padding: "12px 14px", flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: BUCKET[s.key].fg }} /><span style={{ fontSize: 12.5, color: C.textMute, fontWeight: 600 }}>{s.label}</span></div>
-            <div style={{ ...TNUM, fontSize: 19, fontWeight: 700, marginTop: 7 }}>{live ? s.count : inr(s.value)}</div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint, marginTop: 3, textTransform: "uppercase" }}>{live ? "invoices" : s.count + " invoices"}</div>
-          </Card>
-        ))}
-        <Card style={{ padding: "12px 14px", flex: 1, background: C.redBg, border: `1px solid #F1C9C4` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={14} color={C.red} /><span style={{ fontSize: 12.5, color: C.red, fontWeight: 700 }}>ITC at risk</span></div>
-          <div style={{ ...TNUM, fontSize: 19, fontWeight: 700, color: C.red, marginTop: 7 }}>{live ? (live.counts.missing_in_portal + live.counts.mismatched) : inr(ITC_AT_RISK)}</div>
-          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: C.red, marginTop: 3, textTransform: "uppercase" }}>{live ? "flagged invoices" : "Requires action"}</div>
-        </Card>
-      </div>
-      {live && <div style={{ marginBottom: 16, fontSize: 12, color: C.textMute }}>Showing live bucket counts returned by the engine. The detailed table below is illustrative until the per-invoice results endpoint (M7) is wired.</div>}
+        right={<><Btn icon={Download} onClick={() => effectiveLive ? downloadReport(effectiveLive.runId, "reconciliation", "xlsx").catch((e) => alert(e.message)) : go("reports")}>Export report</Btn><Btn variant="primary" icon={Play} onClick={() => go("new")}>Run again</Btn></>} />
+      
+      {loading ? (
+        <div style={{ padding: 50, textAlign: "center", color: C.textMute }}><Loader2 size={22} className="spin" /><div style={{ marginTop: 8, fontSize: 13 }}>Loading recent run data…</div></div>
+      ) : (
+        <>
+          <div style={{ marginTop: -8, display: "flex", alignItems: "center", gap: 10 }}>
+            {runStatusChip(effectiveLive ? "Completed" : "In progress")}
+            {effectiveLive && <span style={{ ...TNUM, fontSize: 11.5, fontWeight: 700, color: C.green2, background: "#E5F3EB", padding: "2px 8px", borderRadius: 4 }}>
+              ● LIVE · {effectiveLive.total} rows{effectiveLive.runId ? " · run " + String(effectiveLive.runId).slice(0, 8) : ""}
+            </span>}
+          </div>
+          <div style={{ display: "flex", gap: 12, margin: "16px 0" }}>
+            {cards.map((s) => (
+              <Card key={s.key} style={{ padding: "12px 14px", flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 7, height: 7, borderRadius: 999, background: BUCKET[s.key].fg }} /><span style={{ fontSize: 12.5, color: C.textMute, fontWeight: 600 }}>{s.label}</span></div>
+                <div style={{ ...TNUM, fontSize: 19, fontWeight: 700, marginTop: 7 }}>{effectiveLive ? s.count : inr(s.value)}</div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: C.textFaint, marginTop: 3, textTransform: "uppercase" }}>{effectiveLive ? "invoices" : s.count + " invoices"}</div>
+              </Card>
+            ))}
+            <Card style={{ padding: "12px 14px", flex: 1, background: C.redBg, border: `1px solid #F1C9C4` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={14} color={C.red} /><span style={{ fontSize: 12.5, color: C.red, fontWeight: 700 }}>ITC at risk</span></div>
+              <div style={{ ...TNUM, fontSize: 19, fontWeight: 700, color: C.red, marginTop: 7 }}>{effectiveLive ? (effectiveLive.counts.missing_in_portal + effectiveLive.counts.mismatched) : inr(ITC_AT_RISK)}</div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", color: C.red, marginTop: 3, textTransform: "uppercase" }}>{effectiveLive ? "flagged invoices" : "Requires action"}</div>
+            </Card>
+          </div>
+          {effectiveLive && <div style={{ marginBottom: 16, fontSize: 12, color: C.textMute }}>Showing live bucket counts returned by the engine. The detailed table below is illustrative until the per-invoice results endpoint (M7) is wired.</div>}
       <Card>
         <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "8px 10px", borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
           {tabs.map((t) => {
@@ -651,7 +685,7 @@ function Reconciliation({ client, go, live }) {
           </div>
         </div>
         <div style={{ overflow: "auto", maxHeight: 440 }}>
-          {live ? (
+          {effectiveLive ? (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr>{th("Status")}{th("Match pass")}{th("Confidence", true)}{th("Tax diff (\u20B9)", true)}{th("PR invoice id")}{th("2B invoice id")}</tr></thead>
               <tbody>
@@ -691,7 +725,7 @@ function Reconciliation({ client, go, live }) {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderTop: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 12.5, color: C.textMute }}>{live ? `Showing ${liveRows.length} of ${live.total} rows` : `Showing 1–${rows.length} of ${tab === "all" ? 192 : rows.length} rows`}</div>
+          <div style={{ fontSize: 12.5, color: C.textMute }}>{effectiveLive ? `Showing ${liveRows.length} of ${effectiveLive.total} rows` : `Showing 1–${rows.length} of ${tab === "all" ? 192 : rows.length} rows`}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <PagBtn><ChevronLeft size={15} /></PagBtn>{["1", "2", "3", "…", "20"].map((p, i) => <PagBtn key={i} active={p === "1"}>{p}</PagBtn>)}<PagBtn><ChevronRight size={15} /></PagBtn>
           </div>

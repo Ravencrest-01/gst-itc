@@ -29,13 +29,18 @@ export function NewRun() {
       formData.append("gstr_2b", gstr2bFile);
       formData.append("tax_period", period);
 
-      // In real life: await createRun(formData);
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network
+      const res = await createRun(formData);
       
-      toast({ title: "Run Started", description: "Reconciliation engine is processing your files." });
-      navigate("/runs/latest");
+      toast({ title: "Run Started", description: "Reconciliation engine successfully processed your files." });
+      
+      // The API returns { status: "success", run_id: "...", ... }
+      if (res.run_id || res.data?.run_id) {
+          navigate(`/runs/${res.run_id || res.data?.run_id}`);
+      } else {
+          navigate("/runs/latest");
+      }
     } catch (err) {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: "Error", description: err?.response?.data?.detail || err.message, variant: "destructive" });
     } finally {
       setLoading(false);
     }

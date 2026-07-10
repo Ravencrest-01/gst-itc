@@ -8,6 +8,7 @@ import { Loading } from "@/components/states/Loading";
 import { ErrorState } from "@/components/states/ErrorState";
 import { formatINR, STATUS_UI, MATCH_STATUS } from "@/lib/utils";
 import { Download, Search, Filter } from "lucide-react";
+import { getRunSummary, getRunResults } from "@/api";
 
 export function RunResults() {
   const { runId } = useParams();
@@ -17,23 +18,44 @@ export function RunResults() {
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    // Mock fetching results
-    setTimeout(() => {
-      setData({
-        period: "April 2026",
-        summary: {
-          total_pr_value: 4520000.50,
-          total_2b_value: 4150000.00,
-        },
-        invoices: [
-          { id: 1, vendor_name: "Acme Corp", gstin: "27AADCA9090A1Z5", invoice_no: "INV-2026-001", date: "2026-04-05", tax_amount: 18000, status: MATCH_STATUS.MATCHED },
-          { id: 2, vendor_name: "Tech Solutions", gstin: "29AABCT1234Q1Z1", invoice_no: "TS/26/042", date: "2026-04-12", tax_amount: 54000, status: MATCH_STATUS.MISMATCHED, tax_diff: -2000 },
-          { id: 3, vendor_name: "Global Freight", gstin: "27AABCG5678Q1Z2", invoice_no: "GF-456", date: "2026-04-18", tax_amount: 12500, status: MATCH_STATUS.MISSING_IN_PORTAL },
-          { id: 4, vendor_name: "Office Supplies Co", gstin: "09AABCO9012Q1Z3", invoice_no: "OS-789", date: "2026-04-20", tax_amount: 4500, status: MATCH_STATUS.PROBABLE },
-        ]
-      });
-      setLoading(false);
-    }, 1000);
+    async function fetchData() {
+      if (!runId || runId === "latest") return; // Should handle latest gracefully, maybe redirect or error out. We assume real runId here.
+      setLoading(true);
+      try {
+        const summaryRes = await getRunSummary(runId);
+        const resultsRes = await getRunResults(runId);
+        
+        const summaryData = summaryRes.data || summaryRes;
+        const resultsData = resultsRes.data || resultsRes;
+        
+        // Map the results to match our expected frontend data shape
+        const invoices = (resultsData.items || []).map(item => ({
+            id: item.id,
+            vendor_name: item.vendor_name || "Unknown Vendor",
+            gstin: item.gstin || "Unknown GSTIN",
+            invoice_no: item.invoice_no || "N/A",
+            date: item.date || "N/A",
+            tax_amount: item.tax_amount || 0,
+            status: item.bucket,
+            tax_diff: item.tax_diff
+        }));
+
+        setData({
+          period: "Selected Period", // Assuming we could fetch this from the run details if we had a getRun endpoint
+          summary: {
+            total_pr_value: summaryData.itc_at_risk + summaryData.itc_recovered || 0, // Mock calculation for now based on what we have
+            total_2b_value: summaryData.itc_recovered || 0,
+          },
+          invoices: invoices
+        });
+      } catch (err) {
+        console.error("Failed to fetch run results:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    
+    fetchData();
   }, [runId]);
 
   if (loading) return <Loading text="Loading reconciliation results..." />;

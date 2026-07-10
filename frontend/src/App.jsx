@@ -15,6 +15,7 @@ import { RunReview } from "./pages/RunReview";
 import { SettingsStub } from "./pages/SettingsStub";
 import { NotFound } from "./pages/NotFound";
 import { Register } from "./pages/Register";
+import { Reports } from "./pages/Reports";
 
 const router = createBrowserRouter([
   {
@@ -70,7 +71,7 @@ const router = createBrowserRouter([
           },
           {
             path: "reports",
-            element: <SettingsStub />, // Stub
+            element: <Reports />, // Render real Reports instead of Stub
           },
           {
             path: "settings/*",

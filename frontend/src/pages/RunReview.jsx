@@ -1,33 +1,48 @@
-import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { Link, useParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Avatar } from "@/components/ui/Avatar";
 import { Check, X, AlertTriangle } from "lucide-react";
 import { formatINR } from "@/lib/utils";
+import { getRunProbableMatches, updateMatchStatus } from "@/api";
+import { Loading } from "@/components/states/Loading";
 
 export function RunReview() {
-  const [loading, setLoading] = useState(false);
-  const [probableMatches, setProbableMatches] = useState([
-    {
-      id: "match_1",
-      confidence: 85,
-      pr_record: { vendor: "Tech Solutions", gstin: "29AABCT1234Q1Z1", invoice_no: "TS-26-042", date: "2026-04-12", tax: 54000 },
-      portal_record: { vendor: "Tech Solutions Pvt Ltd", gstin: "29AABCT1234Q1Z1", invoice_no: "TS/26/042", date: "2026-04-12", tax: 54000 }
-    },
-    {
-      id: "match_2",
-      confidence: 72,
-      pr_record: { vendor: "Office Supplies", gstin: "09AABCO9012Q1Z3", invoice_no: "OS-000789", date: "2026-04-20", tax: 4500 },
-      portal_record: { vendor: "Office Sup Co", gstin: "09AABCO9012Q1Z3", invoice_no: "789", date: "2026-04-21", tax: 4500 }
-    }
-  ]);
+  const { runId } = useParams();
+  const [loading, setLoading] = useState(true);
+  const [probableMatches, setProbableMatches] = useState([]);
 
-  const handleAction = (id, action) => {
+  useEffect(() => {
+    async function loadMatches() {
+      if (!runId) return;
+      setLoading(true);
+      try {
+        const res = await getRunProbableMatches(runId);
+        setProbableMatches(res.data?.items || res.items || []);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadMatches();
+  }, [runId]);
+
+  const handleAction = async (id, action) => {
     // Optimistic UI update
     setProbableMatches(prev => prev.filter(m => m.id !== id));
+    try {
+        const payload = { status: action === "accept" ? "approved" : "rejected" };
+        if (action === "accept") payload.override_bucket = "matched";
+        await updateMatchStatus(id, payload);
+    } catch (err) {
+        console.error(err);
+    }
   };
+
+  if (loading) return <Loading text="Loading probable matches..." />;
 
   return (
     <div className="space-y-6">

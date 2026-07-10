@@ -148,8 +148,66 @@ def get_run_summary(id: uuid.UUID, ctx: TenantContext = Depends(require_active_c
 
 @router.get("/runs/{id}/results")
 def get_run_results(id: uuid.UUID, ctx: TenantContext = Depends(require_active_client), db: Session = Depends(get_db)):
-    matches = db.execute(select(MatchResult).where(MatchResult.run_id == id)).scalars().all()
-    return {"items": [{"id": m.id, "bucket": m.bucket, "tax_diff": m.tax_diff} for m in matches], "total": len(matches), "page": 1, "page_size": 100}
+    # Simple join to get PR or Portal invoice details for display
+    matches = db.execute(
+        select(MatchResult, PurchaseInvoice, PortalInvoice)
+        .outerjoin(PurchaseInvoice, MatchResult.purchase_invoice_id == PurchaseInvoice.id)
+        .outerjoin(PortalInvoice, MatchResult.portal_invoice_id == PortalInvoice.id)
+        .where(MatchResult.run_id == id)
+    ).all()
+    
+    items = []
+    for m, pr, po in matches:
+        # Prefer PR details, fallback to Portal details
+        inv = pr or po
+        if inv:
+            items.append({
+                "id": str(m.id),
+                "bucket": m.bucket.value,
+                "tax_diff": float(m.tax_diff) if m.tax_diff else 0.0,
+                "vendor_name": inv.supplier_name,
+                "gstin": inv.supplier_gstin,
+                "invoice_no": inv.invoice_number,
+                "date": str(inv.invoice_date),
+                "pr_tax": float(pr.total_tax) if pr else 0.0,
+                "po_tax": float(po.total_tax) if po else 0.0
+            })
+            
+    return {"items": items, "total": len(items), "page": 1, "page_size": 100}
+
+@router.get("/runs/{id}/probable")
+def get_probable_matches(id: uuid.UUID, ctx: TenantContext = Depends(require_active_client), db: Session = Depends(get_db)):
+    matches = db.execute(
+        select(MatchResult, PurchaseInvoice, PortalInvoice)
+        .outerjoin(PurchaseInvoice, MatchResult.purchase_invoice_id == PurchaseInvoice.id)
+        .outerjoin(PortalInvoice, MatchResult.portal_invoice_id == PortalInvoice.id)
+        .where(MatchResult.run_id == id)
+        .where(MatchResult.bucket == BucketEnum.probable)
+        .where(MatchResult.review_status == "pending")
+    ).all()
+    
+    items = []
+    for m, pr, po in matches:
+        items.append({
+            "id": str(m.id),
+            "confidence": m.confidence,
+            "pr_record": {
+                "vendor": pr.supplier_name if pr else "Unknown",
+                "gstin": pr.supplier_gstin if pr else "Unknown",
+                "invoice_no": pr.invoice_number if pr else "N/A",
+                "date": str(pr.invoice_date) if pr else "N/A",
+                "tax": float(pr.total_tax) if pr else 0.0
+            } if pr else None,
+            "portal_record": {
+                "vendor": po.supplier_name if po else "Unknown",
+                "gstin": po.supplier_gstin if po else "Unknown",
+                "invoice_no": po.invoice_number if po else "N/A",
+                "date": str(po.invoice_date) if po else "N/A",
+                "tax": float(po.total_tax) if po else 0.0
+            } if po else None
+        })
+        
+    return {"items": items}
 
 @router.patch("/reconcile/matches/{id}")
 def update_match(id: uuid.UUID, payload: MatchUpdate, ctx: TenantContext = Depends(require_active_client), db: Session = Depends(get_db)):

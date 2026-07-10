@@ -53,17 +53,32 @@ export function Topbar() {
         </Button>
         
         {/* Client Switcher */}
-        <div className="hidden sm:flex items-center gap-2 w-64">
-          <Select 
-            value={activeClientId || ""} 
-            onChange={(e) => setActiveClientId(e.target.value)}
-            className="h-9 font-medium"
-          >
-            <option value="" disabled>Select Workspace...</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </Select>
+        <div className="hidden sm:flex items-center gap-2 w-64 relative">
+          <div className="w-full relative group cursor-pointer border rounded-md px-3 py-1.5 bg-muted/20 hover:bg-muted/40 transition-colors flex items-center justify-between">
+            <span className="font-medium text-sm truncate">
+              {activeClientId ? clients.find(c => c.id === activeClientId)?.name || "Select Workspace..." : "Select Workspace..."}
+            </span>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-chevron-down h-4 w-4 text-muted-foreground"><path d="m6 9 6 6 6-6"/></svg>
+            
+            <div className="absolute left-0 top-full mt-1 w-full rounded-md border bg-popover p-1 shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 max-h-64 overflow-y-auto">
+              {clients.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground text-center">No workspaces found</div>
+              ) : (
+                  clients.map(c => (
+                    <div 
+                      key={c.id} 
+                      onClick={() => setActiveClientId(c.id)}
+                      className={`flex items-center w-full rounded-sm px-2 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground ${activeClientId === c.id ? 'bg-accent/50 font-semibold' : ''}`}
+                    >
+                      <div className="h-5 w-5 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold text-[10px] mr-2">
+                        {c.name?.charAt(0) || "W"}
+                      </div>
+                      <span className="truncate">{c.name}</span>
+                    </div>
+                  ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 const PreferencesContext = createContext();
 
 const defaultPreferences = {
-  theme: "system", // 'light', 'dark', 'system'
+  theme: "light", // 'light', 'dark', 'system'
   density: "normal", // 'compact', 'normal', 'comfortable'
   financialYear: "2023-24",
   pageSize: 25,
@@ -12,7 +12,12 @@ const defaultPreferences = {
 export function PreferencesProvider({ children }) {
   const [preferences, setPreferencesState] = useState(() => {
     const saved = localStorage.getItem("ui_preferences");
-    return saved ? { ...defaultPreferences, ...JSON.parse(saved) } : defaultPreferences;
+    const parsed = saved ? { ...defaultPreferences, ...JSON.parse(saved) } : defaultPreferences;
+    // Force light theme if they had system cached, to meet the new requirement
+    if (parsed.theme === "system" || parsed.theme === "dark") {
+      parsed.theme = "light";
+    }
+    return parsed;
   });
 
   const updatePreferences = (newPrefs) => {

@@ -44,16 +44,14 @@ export function AuthProvider({ children }) {
 
   const loginUser = async (credentials) => {
     const { login } = await import('../api');
-    const response = await login(credentials);
-    const data = response.data;
+    const data = await login(credentials);
     localStorage.setItem("auth_token", data.access_token);
     setUser(data.user);
   };
 
   const registerUser = async (registrationData) => {
     const { register } = await import('../api');
-    const response = await register(registrationData);
-    const data = response.data;
+    const data = await register(registrationData);
     localStorage.setItem("auth_token", data.access_token);
     setUser(data.user);
   };

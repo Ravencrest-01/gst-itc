@@ -1,9 +1,18 @@
 import os
+from typing import Any
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ITC-Rec Engine"
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173", "*"]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> list[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",") if i.strip()]
+        return v
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/itc_rec_engine")
     JWT_SECRET: str = os.getenv("JWT_SECRET", "supersecretkey_change_me_in_production")
     ALGORITHM: str = "HS256"

@@ -1,62 +1,84 @@
 import uuid
-from fastapi import Header, HTTPException, Depends
-from sqlalchemy.orm import Session
+from typing import Optional
+from fastapi import Depends, HTTPException, status, Header
+from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
+from sqlalchemy.orm import Session
+from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import SECRET_KEY, ALGORITHM
-from app.modules.m0_schema.models import Client
+from app.core.security import ALGORITHM
+from app.models.domain import User, Workspace, Client, ClientAllocation, RoleEnum
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
+
+class TenantContext:
+    def __init__(self, user: User, workspace: Workspace, active_client: Optional[Client] = None):
+        self.user = user
+        self.workspace = workspace
+        self.active_client = active_client
+
+def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    user = db.execute(select(User).where(User.id == uuid.UUID(user_id))).scalar_one_or_none()
+    if user is None:
+        raise credentials_exception
+    return user
 
 def get_current_tenant_context(
-    authorization: str | None = Header(default=None),
-    x_client_id: str | None = Header(default=None),
-    db: Session = Depends(get_db),
-):
+    x_client_id: Optional[str] = Header(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> TenantContext:
     """
-    Module M3 Seam: real JWT tenant resolution (replaces the hardcoded stub).
-
-    - user_id + workspace_id are read from the signed token
-      (Authorization: Bearer <token>).
-    - client_id (the active company) is read from the X-Client-Id header that
-      the frontend sends after a company is selected. If it's absent we fall
-      back to the workspace's first company, so every existing route keeps
-      working while the UI grows a real company switcher.
+    Resolves the active tenant context: the User, their Workspace, and the optional Active Client.
+    Validates that the active client belongs to the workspace, and if the user is a member,
+    that they have an allocation to that client.
     """
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    token = authorization.split(" ", 1)[1]
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user_id = payload.get("sub")
-    workspace_id = payload.get("workspace_id")
-    if not user_id or not workspace_id:
-        raise HTTPException(status_code=401, detail="Malformed token")
-
-    workspace_uuid = uuid.UUID(workspace_id)
-
-    # Resolve the active company (client).
-    client_uuid = None
+    # Eager load workspace or query it
+    workspace = db.execute(select(Workspace).where(Workspace.id == user.workspace_id)).scalar_one_or_none()
+    if not workspace:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Workspace not found")
+        
+    active_client = None
     if x_client_id:
-        c = (
-            db.query(Client)
-            .filter(Client.id == uuid.UUID(x_client_id), Client.workspace_id == workspace_uuid)
-            .first()
-        )
-        if not c:
-            raise HTTPException(status_code=403, detail="No access to this company")
-        client_uuid = c.id
-    else:
-        first = db.query(Client).filter(Client.workspace_id == workspace_uuid).first()
-        client_uuid = first.id if first else None
+        try:
+            client_uuid = uuid.UUID(x_client_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid X-Client-Id format")
+            
+        active_client = db.execute(select(Client).where(Client.id == client_uuid)).scalar_one_or_none()
+        if not active_client or active_client.workspace_id != workspace.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Client not found in your workspace")
+            
+        # Enforce allocations for members
+        if user.role == RoleEnum.member:
+            allocation = db.execute(
+                select(ClientAllocation)
+                .where(ClientAllocation.client_id == active_client.id)
+                .where(ClientAllocation.user_id == user.id)
+            ).scalar_one_or_none()
+            
+            if not allocation:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have access to this client")
+                
+    return TenantContext(user=user, workspace=workspace, active_client=active_client)
 
-    return {
-        "workspace_id": workspace_uuid,
-        "user_id": uuid.UUID(user_id),
-        "client_id": client_uuid,
-        "role": "admin",
-    }
+def require_active_client(context: TenantContext = Depends(get_current_tenant_context)) -> TenantContext:
+    """Dependency that mandates an X-Client-Id header for scoped routes."""
+    if not context.active_client:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="X-Client-Id header is required")
+    return context

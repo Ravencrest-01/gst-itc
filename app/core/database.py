@@ -1,20 +1,21 @@
-import os
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from app.core.config import settings
 
-load_dotenv()
+# Setup SQLAlchemy engine
+engine = create_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    # Additional pool settings could be configured here for production
+)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Create the core connection hub
-engine = create_engine(DATABASE_URL)
-
-# Create a factory for generating database sessions
+# Setup SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_db():
-    """ FastAPI Dependency: Opens a DB session per request and closes it when done. """
+    """
+    Dependency to yield a database session.
+    """
     db = SessionLocal()
     try:
         yield db

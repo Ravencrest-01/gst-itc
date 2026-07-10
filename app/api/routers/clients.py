@@ -61,3 +61,28 @@ def delete_client(id: uuid.UUID, ctx: TenantContext = Depends(get_current_tenant
     db.delete(client)
     db.commit()
     return {"message": "Deleted"}
+
+from app.models.domain import UploadedFile
+
+@router.get("/{id}/files")
+def get_client_files(id: uuid.UUID, ctx: TenantContext = Depends(get_current_tenant_context), db: Session = Depends(get_db)):
+    # Very simple authorization
+    client = db.execute(select(Client).where(Client.id == id, Client.workspace_id == ctx.workspace.id)).scalar_one_or_none()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+        
+    files = db.execute(
+        select(UploadedFile)
+        .where(UploadedFile.client_id == id)
+        .order_by(UploadedFile.created_at.desc())
+        .limit(20)
+    ).scalars().all()
+    
+    return {"items": [{
+        "id": str(f.id),
+        "filename": f.filename,
+        "kind": f.kind.value if f.kind else "unknown",
+        "tax_period": f.tax_period,
+        "row_count": f.row_count,
+        "created_at": f.created_at.isoformat()
+    } for f in files]}

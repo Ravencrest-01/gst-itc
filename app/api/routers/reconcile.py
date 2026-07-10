@@ -3,6 +3,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
+import os
+import time
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_tenant_context, require_active_client, TenantContext
@@ -13,15 +15,19 @@ from app.services.reconciliation import ingest_file, reconcile, ReconciliationCo
 
 router = APIRouter()
 
+UPLOAD_DIR = "data/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
 @router.post("/reconcile")
 def run_reconciliation_endpoint(
     purchase_register: UploadFile = File(...),
     gstr_2b: UploadFile = File(...),
+    tax_period: str = Form("CURRENT"),
     ctx: TenantContext = Depends(require_active_client),
     db: Session = Depends(get_db)
 ):
     """Legacy/direct multipart upload endpoint utilizing active client context."""
-    run = ReconciliationRun(client_id=ctx.active_client.id, tax_period="CURRENT", status=RunStatusEnum.processing)
+    run = ReconciliationRun(client_id=ctx.active_client.id, tax_period=tax_period, status=RunStatusEnum.processing)
     db.add(run)
     db.flush()
     
@@ -29,11 +35,43 @@ def run_reconciliation_endpoint(
     
     # Process PR
     pr_content = purchase_register.file.read()
+    
+    # Save PR file
+    pr_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{purchase_register.filename}")
+    with open(pr_path, "wb") as f:
+        f.write(pr_content)
+        
+    db_pr_file = UploadedFile(
+        client_id=ctx.active_client.id,
+        kind=FileKindEnum.purchase_register,
+        filename=purchase_register.filename,
+        tax_period=tax_period,
+        storage_path=pr_path
+    )
+    db.add(db_pr_file)
+    
     pr_result = ingest_file(pr_content, kind="purchase_register", config=config)
+    db_pr_file.row_count = len(pr_result.rows)
     
     # Process 2B
     po_content = gstr_2b.file.read()
+    
+    # Save 2B file
+    po_path = os.path.join(UPLOAD_DIR, f"{int(time.time())}_{gstr_2b.filename}")
+    with open(po_path, "wb") as f:
+        f.write(po_content)
+        
+    db_po_file = UploadedFile(
+        client_id=ctx.active_client.id,
+        kind=FileKindEnum.gstr_2b,
+        filename=gstr_2b.filename,
+        tax_period=tax_period,
+        storage_path=po_path
+    )
+    db.add(db_po_file)
+    
     po_result = ingest_file(po_content, kind="gstr_2b", config=config)
+    db_po_file.row_count = len(po_result.rows)
     
     # Run Engine
     matches, summary = reconcile(pr_result.rows, po_result.rows, config)

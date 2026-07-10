@@ -7,45 +7,54 @@ import { Loading } from "@/components/states/Loading";
 import { ErrorState } from "@/components/states/ErrorState";
 import { EmptyState } from "@/components/states/EmptyState";
 import { formatINR, formatDate, STATUS_UI, MATCH_STATUS } from "@/lib/utils";
-import { getDashboardKpis, listRecentRuns } from "@/api";
-import { FilePlus, TrendingUp, AlertCircle, FileText } from "lucide-react";
+import { FilePlus, TrendingUp, AlertCircle, FileText, FileIcon, Download } from "lucide-react";
+import { useActiveClient } from "@/context/ActiveClientContext";
+import { getClientRuns, listFiles } from "@/api";
 
 export function Dashboard() {
+  const { activeClientId } = useActiveClient();
   const [kpis, setKpis] = useState(null);
   const [runs, setRuns] = useState([]);
+  const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     async function loadData() {
+      if (!activeClientId) {
+        setLoading(false);
+        return;
+      }
       try {
         setLoading(true);
-        // We'll mock API calls for now since backend might not exist, but structure it for the real API
-        // const kpiData = await getDashboardKpis();
-        // const runsData = await listRecentRuns();
+        const [runsRes, filesRes] = await Promise.all([
+          getClientRuns(activeClientId),
+          listFiles(activeClientId)
+        ]);
         
-        // Mock data matching the fintech aesthetic
+        // Mocking KPIs for now since backend doesn't have a real KPI endpoint yet,
+        // but we'll base it on real run count
+        const realRuns = runsRes.data?.items || runsRes.items || [];
+        
         setKpis({
           totalItcAvailable: 4520000.50,
           safeToClaim: 3850000.00,
           atRisk: 670000.50,
-          vendorsActionRequired: 12
+          vendorsActionRequired: realRuns.length
         });
         
-        setRuns([
-          { id: "run_1", tax_period: "Apr 2026", status: "completed", match_stats: { matched: 450, mismatched: 12, missing_portal: 45 }, created_at: new Date().toISOString() },
-          { id: "run_2", tax_period: "Mar 2026", status: "completed", match_stats: { matched: 410, mismatched: 2, missing_portal: 10 }, created_at: new Date(Date.now() - 86400000 * 30).toISOString() }
-        ]);
-        
+        setRuns(realRuns);
+        setFiles(filesRes.data?.items || filesRes.items || []);
         setError(null);
       } catch (err) {
+        console.error(err);
         setError(err.message || "Failed to load dashboard data");
       } finally {
         setLoading(false);
       }
     }
     loadData();
-  }, []);
+  }, [activeClientId]);
 
   if (loading) return <Loading text="Loading your financial dashboard..." />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
@@ -111,60 +120,84 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Reconciliations</CardTitle>
-          <CardDescription>Your latest tax period runs</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {runs.length === 0 ? (
-            <EmptyState title="No runs yet" description="Start your first reconciliation to see data here." />
-          ) : (
-            <div className="relative w-full overflow-auto">
-              <table className="w-full caption-bottom text-sm">
-                <thead className="[&_tr]:border-b">
-                  <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
-                    <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Period</th>
-                    <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Date Run</th>
-                    <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Matched</th>
-                    <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Mismatched</th>
-                    <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Missing</th>
-                    <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="[&_tr:last-child]:border-0">
-                  {runs.map((run) => (
-                    <tr key={run.id} className="border-b transition-colors hover:bg-muted/50">
-                      <td className="p-4 align-middle font-medium">{run.tax_period}</td>
-                      <td className="p-4 align-middle">{formatDate(run.created_at)}</td>
-                      <td className="p-4 align-middle text-center">
-                        <Badge variant="outline" className={STATUS_UI[MATCH_STATUS.MATCHED].color}>
-                          {run.match_stats.matched}
-                        </Badge>
-                      </td>
-                      <td className="p-4 align-middle text-center">
-                        <Badge variant="outline" className={STATUS_UI[MATCH_STATUS.MISMATCHED].color}>
-                          {run.match_stats.mismatched}
-                        </Badge>
-                      </td>
-                      <td className="p-4 align-middle text-center">
-                        <Badge variant="outline" className={STATUS_UI[MATCH_STATUS.MISSING_IN_PORTAL].color}>
-                          {run.match_stats.missing_portal}
-                        </Badge>
-                      </td>
-                      <td className="p-4 align-middle text-right">
-                        <Button variant="ghost" size="sm" asChild>
-                          <Link to={`/runs/${run.id}`}>View Results</Link>
-                        </Button>
-                      </td>
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Reconciliations</CardTitle>
+            <CardDescription>Your latest tax period runs</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {runs.length === 0 ? (
+              <EmptyState title="No runs yet" description="Start your first reconciliation to see data here." />
+            ) : (
+              <div className="relative w-full overflow-auto">
+                <table className="w-full caption-bottom text-sm">
+                  <thead className="[&_tr]:border-b">
+                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Period</th>
+                      <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Records</th>
+                      <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Status</th>
+                      <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Action</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  </thead>
+                  <tbody className="[&_tr:last-child]:border-0">
+                    {runs.map((run) => (
+                      <tr key={run.id} className="border-b transition-colors hover:bg-muted/50">
+                        <td className="p-4 align-middle font-medium">{run.tax_period}</td>
+                        <td className="p-4 align-middle text-center">{run.total_records || '-'}</td>
+                        <td className="p-4 align-middle text-center capitalize">{run.status}</td>
+                        <td className="p-4 align-middle text-right">
+                          <Button variant="ghost" size="sm" asChild>
+                            <Link to={`/runs/${run.id}`}>View Results</Link>
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Uploads</CardTitle>
+            <CardDescription>Files you have uploaded for this client</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {files.length === 0 ? (
+              <EmptyState title="No files yet" description="Upload PR and 2B files to see them here." />
+            ) : (
+              <div className="relative w-full overflow-auto">
+                <table className="w-full caption-bottom text-sm">
+                  <thead className="[&_tr]:border-b">
+                    <tr className="border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted">
+                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Filename</th>
+                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Type</th>
+                      <th className="h-12 px-4 text-center align-middle font-medium text-muted-foreground">Rows</th>
+                      <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="[&_tr:last-child]:border-0">
+                    {files.map((file) => (
+                      <tr key={file.id} className="border-b transition-colors hover:bg-muted/50">
+                        <td className="p-4 align-middle font-medium flex items-center">
+                          <FileIcon className="h-4 w-4 mr-2 text-muted-foreground" />
+                          <span className="truncate max-w-[120px]" title={file.filename}>{file.filename}</span>
+                        </td>
+                        <td className="p-4 align-middle text-xs text-muted-foreground">{file.kind}</td>
+                        <td className="p-4 align-middle text-center">{file.row_count}</td>
+                        <td className="p-4 align-middle text-right text-muted-foreground text-xs">{formatDate(file.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

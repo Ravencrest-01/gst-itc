@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, UUID4
+from pydantic import BaseModel, EmailStr, UUID4, Field
 from app.models.enums import RoleEnum, WorkspaceTypeEnum
 
 class Token(BaseModel):
@@ -21,11 +21,11 @@ class OTPRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)
     full_name: str
     workspace_name: str
     workspace_type: WorkspaceTypeEnum
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=72)

@@ -3,21 +3,26 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/context/AuthContext";
+import { useNavigate } from "react-router-dom";
 
 export function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
+  const navigate = useNavigate();
   
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    // Mock login for now
-    setTimeout(() => {
-      login("mock_token_123", { name: "Test User", email, workspace_name: "Demo Org" });
+    try {
+      await login({ email, password });
+      navigate("/dashboard");
+    } catch (error) {
+      alert(error.response?.data?.detail || "Login failed");
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
 
   return (

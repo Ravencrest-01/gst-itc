@@ -14,6 +14,7 @@ import { RunResults } from "./pages/RunResults";
 import { RunReview } from "./pages/RunReview";
 import { SettingsStub } from "./pages/SettingsStub";
 import { NotFound } from "./pages/NotFound";
+import { Register } from "./pages/Register";
 
 const router = createBrowserRouter([
   {
@@ -22,7 +23,7 @@ const router = createBrowserRouter([
   },
   {
     path: "/register",
-    element: <Login />, // Re-using login screen for now
+    element: <Register />,
   },
   {
     path: "/",

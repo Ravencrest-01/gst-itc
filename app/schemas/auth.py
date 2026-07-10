@@ -25,9 +25,7 @@ class RegisterRequest(BaseModel):
     full_name: str
     workspace_name: str
     workspace_type: WorkspaceTypeEnum
-    otp: str
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    otp: Optional[str] = None

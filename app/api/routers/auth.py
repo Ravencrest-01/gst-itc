@@ -14,38 +14,8 @@ from app.schemas.auth import OTPRequest, RegisterRequest, LoginRequest, TokenDat
 
 router = APIRouter()
 
-import random
-def generate_otp() -> str:
-    return str(random.randint(100000, 999999))
-
-@router.post("/request-otp")
-def request_otp(payload: OTPRequest, db: Session = Depends(get_db)):
-    otp = generate_otp()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    
-    # Store OTP
-    db.add(OTPVerification(email=payload.email, otp_code=otp, expires_at=expires_at))
-    db.commit()
-    
-    # Send email (or console fallback)
-    send_otp_email(payload.email, otp)
-    return {"message": "OTP sent successfully"}
-
 @router.post("/register", response_model=TokenData)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    # 1. Verify OTP
-    otp_record = db.execute(
-        select(OTPVerification)
-        .where(OTPVerification.email == payload.email)
-        .where(OTPVerification.otp_code == payload.otp)
-        .where(OTPVerification.is_used == False)
-        .where(OTPVerification.expires_at > datetime.now(timezone.utc))
-    ).scalar_one_or_none()
-    
-    if not otp_record:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    
-    otp_record.is_used = True
     
     # 2. Check existing user
     if db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none():
@@ -79,19 +49,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
     if not user or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-    if payload.otp:
-        otp_record = db.execute(
-            select(OTPVerification)
-            .where(OTPVerification.email == payload.email)
-            .where(OTPVerification.otp_code == payload.otp)
-            .where(OTPVerification.is_used == False)
-            .where(OTPVerification.expires_at > datetime.now(timezone.utc))
-        ).scalar_one_or_none()
-        if not otp_record:
-            raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-        otp_record.is_used = True
-        db.commit()
         
     token = create_access_token(user.id, user.email, user.workspace_id, user.role)
     return {

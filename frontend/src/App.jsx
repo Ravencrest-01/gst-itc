@@ -12,10 +12,8 @@ import { ClientsList } from "./pages/ClientsList";
 import { NewRun } from "./pages/NewRun";
 import { RunResults } from "./pages/RunResults";
 import { RunReview } from "./pages/RunReview";
-import { SettingsStub } from "./pages/SettingsStub";
 import { NotFound } from "./pages/NotFound";
 import { Register } from "./pages/Register";
-import { Reports } from "./pages/Reports";
 
 const router = createBrowserRouter([
   {

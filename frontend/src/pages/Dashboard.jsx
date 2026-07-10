@@ -56,8 +56,27 @@ export function Dashboard() {
     loadData();
   }, [activeClientId]);
 
+  if (!activeClientId) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight">Executive Dashboard</h2>
+            <p className="text-muted-foreground">Overview of your ITC health and recent reconciliations.</p>
+          </div>
+        </div>
+        <EmptyState 
+          icon={FileText} 
+          title="No Workspace Selected" 
+          description="Please select or create a client workspace to view your dashboard." 
+        />
+      </div>
+    );
+  }
+
   if (loading) return <Loading text="Loading your financial dashboard..." />;
   if (error) return <ErrorState message={error} onRetry={() => window.location.reload()} />;
+  if (!kpis) return null; // Wait for kpis to load or be set
 
   return (
     <div className="space-y-6">
@@ -81,7 +100,7 @@ export function Dashboard() {
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tabular-nums">{formatINR(kpis.totalItcAvailable)}</div>
+            <div className="text-2xl font-bold tabular-nums">{formatINR(kpis?.totalItcAvailable || 0)}</div>
             <p className="text-xs text-muted-foreground mt-1">Based on purchase register</p>
           </CardContent>
         </Card>
@@ -92,7 +111,7 @@ export function Dashboard() {
             <TrendingUp className="h-4 w-4 text-status-matched" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tabular-nums text-status-matched">{formatINR(kpis.safeToClaim)}</div>
+            <div className="text-2xl font-bold tabular-nums text-status-matched">{formatINR(kpis?.safeToClaim || 0)}</div>
             <p className="text-xs text-status-matched/80 mt-1">Perfect matches in GSTR-2B</p>
           </CardContent>
         </Card>
@@ -103,7 +122,7 @@ export function Dashboard() {
             <AlertCircle className="h-4 w-4 text-status-missing" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tabular-nums text-status-missing">{formatINR(kpis.atRisk)}</div>
+            <div className="text-2xl font-bold tabular-nums text-status-missing">{formatINR(kpis?.atRisk || 0)}</div>
             <p className="text-xs text-status-missing/80 mt-1">Mismatched or missing in portal</p>
           </CardContent>
         </Card>
@@ -114,7 +133,7 @@ export function Dashboard() {
             <AlertCircle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold tabular-nums">{kpis.vendorsActionRequired}</div>
+            <div className="text-2xl font-bold tabular-nums">{kpis?.vendorsActionRequired || 0}</div>
             <p className="text-xs text-muted-foreground mt-1">Suppliers requiring follow-up</p>
           </CardContent>
         </Card>

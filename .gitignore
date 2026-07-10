@@ -2,3 +2,8 @@
 /project-description/
 backend/.venv
 
+# Environment variables
+.env
+.env.*
+**/.env
+**/.env.*

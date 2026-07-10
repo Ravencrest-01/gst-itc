@@ -12,7 +12,10 @@ from app.models.models import User, Workspace, OtpVerification, OtpPurpose, Subs
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.api.dependencies.auth import get_current_user
 import uuid
+import random
+import string
 from datetime import datetime, timezone, timedelta
+from app.core.email import send_otp_email
 
 router = APIRouter()
 
@@ -29,8 +32,7 @@ def load_mock_config():
 @router.post("/auth/request-otp", response_model=RequestOtpResponse)
 def request_otp(data: RequestOtp, db: Session = Depends(get_db)):
     # OTP logic
-    mock_config = load_mock_config()
-    otp_code = mock_config.get("otp_code", "123456")
+    otp_code = "".join(random.choices(string.digits, k=6))
     
     otp_record = OtpVerification(
         email=data.email,
@@ -40,6 +42,9 @@ def request_otp(data: RequestOtp, db: Session = Depends(get_db)):
     )
     db.add(otp_record)
     db.commit()
+    
+    # Send email
+    send_otp_email(data.email, otp_code, "registration")
     
     return RequestOtpResponse(status="success", message="OTP sent successfully")
 
@@ -139,8 +144,7 @@ def request_email_update_otp(data: RequestOtp, current_user: User = Depends(get_
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already taken")
         
-    mock_config = load_mock_config()
-    otp_code = mock_config.get("email_update_otp", "654321")
+    otp_code = "".join(random.choices(string.digits, k=6))
     
     otp_record = OtpVerification(
         email=data.email,
@@ -150,6 +154,8 @@ def request_email_update_otp(data: RequestOtp, current_user: User = Depends(get_
     )
     db.add(otp_record)
     db.commit()
+    
+    send_otp_email(data.email, otp_code, "email_change")
     
     return RequestOtpResponse(status="success", message="OTP sent successfully")
 

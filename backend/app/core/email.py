@@ -20,12 +20,16 @@ def send_otp_email(to_email: str, otp_code: str, purpose: str = "registration"):
     msg.set_content(content)
     
     try:
-        server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT)
-        server.starttls()
+        if settings.SMTP_PORT == 465:
+            server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
+        else:
+            server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
+            server.starttls()
+            
         server.login(settings.SMTP_USER, settings.SMTP_PASS)
         server.send_message(msg)
         server.quit()
     except Exception as e:
         print(f"Failed to send email: {e}")
-        # Not raising HTTP exception here so we don't break the flow if SMTP fails temporarily,
-        # but in production we might want to log this properly or retry.
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"Failed to send email. Please check your SMTP configuration. Error: {str(e)}")

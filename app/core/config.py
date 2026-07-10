@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     
     # Security
-    SECRET_KEY: str
+    JWT_SECRET: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 # 24 hours
     
     # CORS
@@ -21,11 +21,11 @@ class Settings(BaseSettings):
     MAX_UPLOAD_MB: int = 50
     
     # SMTP
-    SMTP_SERVER: str | None = None
+    SMTP_HOST: str | None = None
     SMTP_PORT: int | None = None
     SMTP_USER: str | None = None
-    SMTP_PASSWORD: str | None = None
-    SMTP_FROM_EMAIL: str | None = None
+    SMTP_PASS: str | None = None
+    SMTP_FROM: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env", 

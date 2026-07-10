@@ -1,11 +1,11 @@
 import os
-from typing import Any
+from typing import Any, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "ITC-Rec Engine"
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173", "*"]
+    CORS_ORIGINS: Union[str, list[str]] = ["http://localhost:3000", "http://localhost:5173", "*"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #14324c;
+  --color-navy: #1f4e79;
+  --color-primary: #14324c;
+  --color-accent: #2e75b6;
+  --color-matched: #1b7a4b;
+  --color-attention: #b8860b;
+  --color-risk: #c0392b;
+  
+  --color-surface-paper: #f7f9fb;
+  --color-surface-panel: #fff;
+  --color-surface-line: #e3eaf1;
+
+  --radius-sm: 7px;
+  --radius-md: 10px;
+}
+
+@layer base {
+  :root {
+    --background: var(--color-surface-paper);
+    --foreground: var(--color-ink);
+    
+    /* Shadcn defaults mapped to our theme */
+    --card: var(--color-surface-panel);
+    --card-foreground: var(--color-ink);
+    --popover: var(--color-surface-panel);
+    --popover-foreground: var(--color-ink);
+    --primary: var(--color-primary);
+    --primary-foreground: #ffffff;
+    --secondary: var(--color-surface-paper);
+    --secondary-foreground: var(--color-ink);
+    --muted: var(--color-surface-paper);
+    --muted-foreground: #64748b;
+    --accent: var(--color-surface-paper);
+    --accent-foreground: var(--color-ink);
+    --destructive: var(--color-risk);
+    --destructive-foreground: #ffffff;
+    --border: var(--color-surface-line);
+    --input: var(--color-surface-line);
+    --ring: var(--color-accent);
+    --radius: var(--radius-md);
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  
+  /* Ledger Table Pattern */
+  .ledger-table th {
+    @apply sticky top-0 bg-surface-panel border-b border-surface-line text-left py-3 px-4 font-semibold;
+  }
+  .ledger-table td {
+    @apply py-3 px-4 border-b border-surface-line align-middle;
+  }
+  .ledger-table tr:hover td {
+    @apply bg-surface-paper;
+  }
+  .mono-tabular {
+    font-variant-numeric: tabular-nums;
+    @apply font-mono;
+  }
+}

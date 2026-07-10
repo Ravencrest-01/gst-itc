@@ -30,7 +30,7 @@ export function Register() {
       });
       navigate("/dashboard");
     } catch (error) {
-      alert(error.response?.data?.detail || "Registration failed");
+      alert(error.message || "Registration failed");
     } finally {
       setLoading(false);
     }

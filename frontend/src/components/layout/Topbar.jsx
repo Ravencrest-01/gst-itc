@@ -56,7 +56,7 @@ export function Topbar() {
         <div className="hidden sm:flex items-center gap-2 w-64 relative">
           <div className="w-full relative group cursor-pointer border rounded-md px-3 py-1.5 bg-muted/20 hover:bg-muted/40 transition-colors flex items-center justify-between">
             <span className="font-medium text-sm truncate">
-              {activeClientId ? clients.find(c => c.id === activeClientId)?.name || "Select Workspace..." : "Select Workspace..."}
+              {activeClientId ? clients.find(c => c.id === activeClientId)?.legal_name || "Select Workspace..." : "Select Workspace..."}
             </span>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-chevron-down h-4 w-4 text-muted-foreground"><path d="m6 9 6 6 6-6"/></svg>
             
@@ -71,9 +71,9 @@ export function Topbar() {
                       className={`flex items-center w-full rounded-sm px-2 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground ${activeClientId === c.id ? 'bg-accent/50 font-semibold' : ''}`}
                     >
                       <div className="h-5 w-5 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold text-[10px] mr-2">
-                        {c.name?.charAt(0) || "W"}
+                        {c.legal_name?.charAt(0) || "W"}
                       </div>
-                      <span className="truncate">{c.name}</span>
+                      <span className="truncate">{c.legal_name}</span>
                     </div>
                   ))
               )}

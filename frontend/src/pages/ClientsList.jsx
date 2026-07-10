@@ -42,9 +42,9 @@ export function ClientsList() {
     setIsSubmitting(true);
     try {
         await createClient({
-            name: newClientName,
+            legal_name: newClientName,
             gstin: newClientGstin,
-            status: "active"
+            state_code: newClientGstin.substring(0, 2) || "00"
         });
         toast({ title: "Success", description: "Client created successfully." });
         setIsModalOpen(false);
@@ -99,11 +99,11 @@ export function ClientsList() {
               <CardHeader>
                 <div className="flex justify-between items-start">
                   <div className="h-10 w-10 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold">
-                    {client.name?.charAt(0) || "C"}
+                    {client.legal_name?.charAt(0) || "C"}
                   </div>
                   <Badge variant={client.status === 'active' ? 'default' : 'secondary'}>{client.status || "active"}</Badge>
                 </div>
-                <CardTitle className="mt-4">{client.name}</CardTitle>
+                <CardTitle className="mt-4">{client.legal_name || "Unnamed Client"}</CardTitle>
                 <CardDescription className="font-mono text-xs">{client.gstin}</CardDescription>
               </CardHeader>
               <CardContent>

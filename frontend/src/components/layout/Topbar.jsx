@@ -1,122 +1,135 @@
-import React, { useState, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { LogOut, User, Plus, WifiOff, Menu } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
-import { useActiveClient } from "@/context/ActiveClientContext";
-import { Button } from "../ui/Button";
-import { Avatar } from "../ui/Avatar";
-import { Select } from "../ui/Select";
-import { listClients } from "@/api";
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { useActiveClient } from '../../context/ActiveClientContext';
+import { usePreferences } from '../../context/PreferencesContext';
+import { client as apiClient } from '../../api/client';
 
 export function Topbar() {
-  const { user, logout } = useAuth();
-  const { activeClientId, setActiveClientId } = useActiveClient();
   const navigate = useNavigate();
-  const [clients, setClients] = useState([]);
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const { user, logout } = useAuth();
+  const { clients, activeId, setActive } = useActiveClient();
+  const { prefs, setPref } = usePreferences();
+  
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [apiOnline, setApiOnline] = useState(true);
+  const menuRef = useRef(null);
 
   useEffect(() => {
-    // Load clients for the switcher
-    const fetchClients = async () => {
+    // Ping API for connectivity
+    const ping = async () => {
       try {
-        const data = await listClients();
-        // Assuming response is an array of clients
-        setClients(Array.isArray(data) ? data : data.items || []);
+        await apiClient.get('');
+        setApiOnline(true);
       } catch (err) {
-        console.error("Failed to load clients for topbar");
+        setApiOnline(false);
       }
     };
-    fetchClients();
-
-    // Setup online/offline listeners
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    ping();
+    const interval = setInterval(ping, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  const handleLogout = () => {
-    logout();
-    navigate("/login");
+  // Close menus on outside click
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const handleNewRun = () => {
+    if (activeId) {
+      navigate(`/clients/${activeId}/runs/new`);
+    } else {
+      navigate('/clients');
+    }
   };
 
   return (
-    <header className="h-16 border-b bg-background flex items-center justify-between px-6 shrink-0 sticky top-0 z-10">
+    <header className="h-16 border-b border-border bg-card flex items-center justify-between px-6 shrink-0">
       <div className="flex items-center gap-4">
-        {/* Mobile menu button (stubbed for now) */}
-        <Button variant="ghost" size="icon" className="md:hidden">
-          <Menu className="h-5 w-5" />
-        </Button>
-        
-        {/* Client Switcher */}
-        <div className="hidden sm:flex items-center gap-2 w-64 relative">
-          <div className="w-full relative group cursor-pointer border rounded-md px-3 py-1.5 bg-muted/20 hover:bg-muted/40 transition-colors flex items-center justify-between">
-            <span className="font-medium text-sm truncate">
-              {activeClientId ? clients.find(c => c.id === activeClientId)?.legal_name || "Select Workspace..." : "Select Workspace..."}
-            </span>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-chevron-down h-4 w-4 text-muted-foreground"><path d="m6 9 6 6 6-6"/></svg>
-            
-            <div className="absolute left-0 top-full mt-1 w-full rounded-md border bg-popover p-1 shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50 max-h-64 overflow-y-auto">
-              {clients.length === 0 ? (
-                  <div className="p-2 text-sm text-muted-foreground text-center">No workspaces found</div>
-              ) : (
-                  clients.map(c => (
-                    <div 
-                      key={c.id} 
-                      onClick={() => setActiveClientId(c.id)}
-                      className={`flex items-center w-full rounded-sm px-2 py-1.5 text-sm cursor-pointer hover:bg-accent hover:text-accent-foreground ${activeClientId === c.id ? 'bg-accent/50 font-semibold' : ''}`}
-                    >
-                      <div className="h-5 w-5 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold text-[10px] mr-2">
-                        {c.legal_name?.charAt(0) || "W"}
-                      </div>
-                      <span className="truncate">{c.legal_name}</span>
-                    </div>
-                  ))
-              )}
-            </div>
-          </div>
-        </div>
+        {/* Company Switcher */}
+        <select 
+          className="bg-secondary border border-border text-foreground text-sm rounded-radius px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring"
+          value={activeId || ''}
+          onChange={(e) => setActive(e.target.value)}
+          disabled={clients.length === 0}
+        >
+          {clients.length === 0 ? (
+            <option value="">No companies</option>
+          ) : (
+            clients.map((c) => (
+              <option key={c.id} value={c.id}>{c.legal_name}</option>
+            ))
+          )}
+        </select>
+
+        {/* FY Switcher */}
+        <select
+          className="bg-transparent border-none text-foreground text-sm font-medium focus:outline-none cursor-pointer"
+          value={prefs.financialYear}
+          onChange={(e) => setPref('financialYear', e.target.value)}
+        >
+          <option value="2026-27">FY 2026-27</option>
+          <option value="2025-26">FY 2025-26</option>
+        </select>
       </div>
 
-      <div className="flex items-center gap-4">
-        {isOffline && (
-          <div className="flex items-center gap-2 text-xs font-medium text-destructive bg-destructive/10 px-3 py-1.5 rounded-full">
-            <WifiOff className="h-3.5 w-3.5" />
-            Offline Mode
-          </div>
-        )}
+      <div className="flex items-center gap-6">
+        <button 
+          onClick={handleNewRun}
+          className="flex items-center gap-1.5 text-sm font-medium text-accent hover:text-accent/80 transition-colors"
+        >
+          <span className="material-symbols-outlined text-[20px]">add_circle</span>
+          New reconciliation
+        </button>
 
-        <Button size="sm" onClick={() => navigate("/runs/new")} className="hidden sm:flex">
-          <Plus className="mr-2 h-4 w-4" />
-          New Reconciliation
-        </Button>
+        <div className="flex items-center gap-2" title={apiOnline ? "API Online" : "API Offline"}>
+          <div className={`w-2.5 h-2.5 rounded-full ${apiOnline ? 'bg-matched' : 'bg-destructive'}`}></div>
+        </div>
 
-        <div className="h-6 w-px bg-border mx-1"></div>
-
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col text-right hidden sm:flex">
-            <span className="text-sm font-medium leading-none">{user?.full_name || user?.name || "User"}</span>
-            <span className="text-xs text-muted-foreground mt-1">{user?.workspace_name || "Workspace"}</span>
-          </div>
-          <div className="relative group">
-            <Avatar fallback={user?.name?.charAt(0).toUpperCase() || "U"} className="cursor-pointer" />
-            <div className="absolute right-0 top-full mt-2 w-48 rounded-md border bg-popover p-1 shadow-md opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-              <div className="px-2 py-1.5 text-sm font-medium border-b mb-1 sm:hidden">
-                {user?.name}
+        {/* User Menu */}
+        <div className="relative" ref={menuRef}>
+          <button 
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="flex items-center justify-center w-9 h-9 rounded-full bg-secondary text-foreground hover:bg-secondary/80 transition-colors font-medium border border-border"
+          >
+            {user?.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
+          </button>
+          
+          {menuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-48 bg-popover border border-border rounded-radius shadow-lg overflow-hidden z-50 animate-in fade-in zoom-in-95">
+              <div className="px-4 py-3 border-b border-border">
+                <p className="text-sm font-medium text-foreground truncate">{user?.full_name || 'User'}</p>
+                <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
               </div>
-              <button 
-                onClick={handleLogout}
-                className="flex items-center w-full rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10"
-              >
-                <LogOut className="mr-2 h-4 w-4" />
-                Sign out
-              </button>
+              <div className="py-1">
+                <Link 
+                  to="/settings/profile" 
+                  onClick={() => setMenuOpen(false)}
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-foreground hover:bg-secondary transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[18px]">person</span>
+                  Profile & settings
+                </Link>
+                <button 
+                  onClick={() => {
+                    setMenuOpen(false);
+                    logout();
+                    navigate('/login');
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-2 text-sm text-destructive hover:bg-destructive/5 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[18px]">logout</span>
+                  Sign out
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </header>

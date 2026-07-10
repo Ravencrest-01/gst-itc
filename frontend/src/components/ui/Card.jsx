@@ -1,32 +1,27 @@
-import React from "react";
-import { cn } from "@/lib/utils";
+import React from 'react';
+import { cn } from '../../lib/utils';
 
-export const Card = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("rounded-xl border bg-card text-card-foreground shadow-sm", className)} {...props} />
-));
-Card.displayName = "Card";
+export function Card({ children, className, ...props }) {
+  return (
+    <div className={cn("rounded-radius border border-border bg-card text-card-foreground shadow-sm overflow-hidden", className)} {...props}>
+      {children}
+    </div>
+  );
+}
 
-export const CardHeader = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
-));
-CardHeader.displayName = "CardHeader";
+export function CardHead({ title, actions, className }) {
+  return (
+    <div className={cn("flex items-center justify-between px-6 py-4 border-b border-border bg-muted/30", className)}>
+      <h3 className="text-lg font-semibold leading-none tracking-tight text-foreground">{title}</h3>
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
 
-export const CardTitle = React.forwardRef(({ className, ...props }, ref) => (
-  <h3 ref={ref} className={cn("font-semibold leading-none tracking-tight", className)} {...props} />
-));
-CardTitle.displayName = "CardTitle";
-
-export const CardDescription = React.forwardRef(({ className, ...props }, ref) => (
-  <p ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
-));
-CardDescription.displayName = "CardDescription";
-
-export const CardContent = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("p-6 pt-0", className)} {...props} />
-));
-CardContent.displayName = "CardContent";
-
-export const CardFooter = React.forwardRef(({ className, ...props }, ref) => (
-  <div ref={ref} className={cn("flex items-center p-6 pt-0", className)} {...props} />
-));
-CardFooter.displayName = "CardFooter";
+export function CardBody({ children, flush = false, className }) {
+  return (
+    <div className={cn(flush ? "" : "p-6", className)}>
+      {children}
+    </div>
+  );
+}

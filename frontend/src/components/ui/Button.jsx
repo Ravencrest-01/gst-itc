@@ -1,41 +1,44 @@
-import React from "react";
-import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import React from 'react';
+import { cn } from '../../lib/utils';
 
-const buttonVariants = {
-  default: "bg-primary text-primary-foreground hover:bg-primary/90",
-  destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-  outline: "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
-  secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-  ghost: "hover:bg-accent hover:text-accent-foreground",
-  link: "text-primary underline-offset-4 hover:underline",
-};
+export function Button({ 
+  children, 
+  variant = 'default', 
+  size, 
+  block, 
+  as: Component = 'button', 
+  className,
+  disabled,
+  ...props 
+}) {
+  const baseClasses = "inline-flex items-center justify-center rounded-radius font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none";
+  
+  const variants = {
+    default: "bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border",
+    primary: "bg-primary text-primary-foreground hover:bg-primary/90",
+    accent: "bg-accent text-accent-foreground hover:bg-accent/90",
+    danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+    ghost: "hover:bg-accent hover:text-accent-foreground bg-transparent border-transparent",
+  };
+  
+  const sizes = {
+    default: "h-10 px-4 py-2 text-sm",
+    sm: "h-8 rounded-radius px-3 text-xs",
+  };
 
-const buttonSizes = {
-  default: "h-10 px-4 py-2",
-  sm: "h-9 rounded-md px-3",
-  lg: "h-11 rounded-md px-8",
-  icon: "h-10 w-10",
-};
-
-export const Button = React.forwardRef(
-  ({ className, variant = "default", size = "default", isLoading, children, disabled, ...props }, ref) => {
-    return (
-      <button
-        ref={ref}
-        disabled={disabled || isLoading}
-        className={cn(
-          "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
-          buttonVariants[variant],
-          buttonSizes[size],
-          className
-        )}
-        {...props}
-      >
-        {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-        {children}
-      </button>
-    );
-  }
-);
-Button.displayName = "Button";
+  return (
+    <Component
+      className={cn(
+        baseClasses,
+        variants[variant],
+        sizes[size === 'sm' ? 'sm' : 'default'],
+        block ? "w-full" : "",
+        className
+      )}
+      disabled={disabled}
+      {...props}
+    >
+      {children}
+    </Component>
+  );
+}

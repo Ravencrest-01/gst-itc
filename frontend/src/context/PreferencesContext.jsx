@@ -1,57 +1,48 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
-const PreferencesContext = createContext();
+const PreferencesContext = createContext(null);
 
-const defaultPreferences = {
-  theme: "light", // 'light', 'dark', 'system'
-  density: "normal", // 'compact', 'normal', 'comfortable'
-  financialYear: "2023-24",
-  pageSize: 25,
+const defaultPrefs = {
+  theme: 'light',
+  density: 'comfortable',
+  dateFormat: 'DD/MM/YYYY',
+  financialYear: '2026-27',
+  pageSize: 20
 };
 
 export function PreferencesProvider({ children }) {
-  const [preferences, setPreferencesState] = useState(() => {
-    const saved = localStorage.getItem("ui_preferences");
-    const parsed = saved ? { ...defaultPreferences, ...JSON.parse(saved) } : defaultPreferences;
-    // Force light theme if they had system cached, to meet the new requirement
-    if (parsed.theme === "system" || parsed.theme === "dark") {
-      parsed.theme = "light";
-    }
-    return parsed;
+  const [prefs, setPrefsState] = useState(() => {
+    const saved = localStorage.getItem('preferences');
+    return saved ? { ...defaultPrefs, ...JSON.parse(saved) } : defaultPrefs;
   });
 
-  const updatePreferences = (newPrefs) => {
-    setPreferencesState((prev) => {
-      const updated = { ...prev, ...newPrefs };
-      localStorage.setItem("ui_preferences", JSON.stringify(updated));
-      return updated;
+  const setPref = (key, value) => {
+    setPrefsState((prev) => {
+      const newPrefs = { ...prev, [key]: value };
+      localStorage.setItem('preferences', JSON.stringify(newPrefs));
+      return newPrefs;
     });
   };
 
-  // Apply theme to document
+  const reset = () => {
+    setPrefsState(defaultPrefs);
+    localStorage.removeItem('preferences');
+  };
+
+  // Apply theme and density to document root
   useEffect(() => {
-    const root = window.document.documentElement;
-    root.classList.remove("light", "dark");
-    
-    let activeTheme = preferences.theme;
-    if (activeTheme === "system") {
-      activeTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    
-    root.classList.add(activeTheme);
-  }, [preferences.theme]);
+    const root = document.documentElement;
+    root.setAttribute('data-theme', prefs.theme);
+    root.setAttribute('data-density', prefs.density);
+  }, [prefs.theme, prefs.density]);
 
   return (
-    <PreferencesContext.Provider value={{ preferences, updatePreferences }}>
+    <PreferencesContext.Provider value={{ prefs, setPref, reset }}>
       {children}
     </PreferencesContext.Provider>
   );
 }
 
 export function usePreferences() {
-  const context = useContext(PreferencesContext);
-  if (context === undefined) {
-    throw new Error("usePreferences must be used within a PreferencesProvider");
-  }
-  return context;
+  return useContext(PreferencesContext);
 }

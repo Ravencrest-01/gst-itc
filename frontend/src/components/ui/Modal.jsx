@@ -1,42 +1,82 @@
-import React, { useEffect } from "react";
-import { X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { cn } from '../../lib/utils';
+import { Button } from './Button';
 
-export function Modal({ isOpen, onClose, title, description, children, className }) {
-  // Prevent body scroll when open
+export function Modal({ isOpen, onClose, title, children, footer, wide = false }) {
+  const [mounted, setMounted] = useState(false);
+
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && isOpen) onClose();
+    };
+    document.addEventListener('keydown', handleEscape);
     if (isOpen) {
-      document.body.style.overflow = "hidden";
+      document.body.style.overflow = 'hidden';
     } else {
-      document.body.style.overflow = "unset";
+      document.body.style.overflow = 'unset';
     }
     return () => {
-      document.body.style.overflow = "unset";
+      document.removeEventListener('keydown', handleEscape);
+      document.body.style.overflow = 'unset';
     };
-  }, [isOpen]);
+  }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
-      <div className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg">
-        <div className="flex flex-col space-y-1.5 text-center sm:text-left">
-          {title && <h2 className="text-lg font-semibold leading-none tracking-tight">{title}</h2>}
-          {description && <p className="text-sm text-muted-foreground">{description}</p>}
+  return createPortal(
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm animate-in fade-in flex items-center justify-center p-4" onClick={onClose}>
+      <div 
+        className={cn("bg-card text-card-foreground rounded-xl shadow-lg border border-border w-full flex flex-col max-h-[90vh] animate-in zoom-in-95", wide ? "max-w-3xl" : "max-w-md")}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button 
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <span className="material-symbols-outlined">close</span>
+          </button>
         </div>
-        
-        <button
-          onClick={onClose}
-          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground"
-        >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </button>
-
-        <div className={cn("pt-4", className)}>
+        <div className="p-6 overflow-y-auto flex-1">
           {children}
         </div>
+        {footer && (
+          <div className="px-6 py-4 border-t border-border bg-muted/30 flex justify-end gap-3">
+            {footer}
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body
+  );
+}
+
+export function ConfirmDialog({ isOpen, onClose, onConfirm, title, message, danger = false, busy = false }) {
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={busy ? () => {} : onClose}
+      title={title || (danger ? "Are you sure?" : "Confirm")}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button 
+            variant={danger ? "danger" : "primary"} 
+            onClick={onConfirm} 
+            disabled={busy}
+          >
+            {busy ? "Processing..." : "Confirm"}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-muted-foreground">{message}</p>
+    </Modal>
   );
 }

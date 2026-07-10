@@ -1,55 +1,72 @@
-import axios from "axios";
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
-// Create custom event target for auth/client events
-export const apiEvents = new EventTarget();
-
-const baseURL = import.meta.env.VITE_API_BASE || "/api";
-
-export const apiClient = axios.create({
-  baseURL,
-  headers: {
-    "Content-Type": "application/json",
-  },
-});
-
-// Request interceptor for token and client ID
-apiClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem("auth_token");
-  const activeClientId = localStorage.getItem("active_client_id");
-
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
   }
-  if (activeClientId) {
-    config.headers["X-Client-Id"] = activeClientId;
+}
+
+async function request(endpoint, options = {}) {
+  const token = localStorage.getItem('token');
+  const clientId = localStorage.getItem('activeClientId');
+  
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (clientId) headers['X-Client-Id'] = clientId;
+  
+  // Remove content-type if FormData is passed (browser sets it automatically with boundary)
+  if (options.body instanceof FormData) {
+    delete headers['Content-Type'];
   }
-  return config;
-}, (error) => Promise.reject(error));
 
-// Response interceptor for error handling
-apiClient.interceptors.response.use(
-  (response) => response.data,
-  (error) => {
-    // Handle network errors (offline)
-    if (!error.response) {
-      const offlineError = new Error("Network error. You may be offline or the server is unreachable.");
-      offlineError.isOffline = true;
-      return Promise.reject(offlineError);
-    }
+  const config = {
+    ...options,
+    headers,
+  };
 
-    const { status, data } = error.response;
-
-    // Handle 401 Unauthorized globally
-    if (status === 401) {
-      apiEvents.dispatchEvent(new Event("unauthorized"));
-    }
-
-    // Extract detail message if present
-    const message = data?.detail || data?.message || "An unexpected error occurred.";
-    const formattedError = new Error(message);
-    formattedError.status = status;
-    formattedError.data = data;
+  try {
+    const response = await fetch(`${API_URL}${endpoint}`, config);
     
-    return Promise.reject(formattedError);
+    // Auth failures
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      // Trigger a redirect via event or auth context hook
+      window.dispatchEvent(new Event('auth:unauthorized'));
+    }
+
+    const contentType = response.headers.get('content-type');
+    let data;
+    
+    // Handle File Streams (e.g. downloads)
+    if (contentType && (contentType.includes('application/vnd') || contentType.includes('application/pdf'))) {
+        return response.blob();
+    }
+    
+    if (contentType && contentType.includes('application/json')) {
+      data = await response.json();
+    }
+    
+    if (!response.ok) {
+      throw new ApiError(data?.detail || 'An API error occurred', response.status);
+    }
+    
+    return data;
+  } catch (error) {
+    if (error.name === 'TypeError' && error.message === 'Failed to fetch') {
+      throw new ApiError('Cannot connect to the server', 0);
+    }
+    throw error;
   }
-);
+}
+
+export const client = {
+  get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
+  post: (endpoint, body, options) => request(endpoint, { method: 'POST', body: body instanceof FormData ? body : JSON.stringify(body), ...options }),
+  patch: (endpoint, body, options) => request(endpoint, { method: 'PATCH', body: body instanceof FormData ? body : JSON.stringify(body), ...options }),
+  delete: (endpoint, options) => request(endpoint, { method: 'DELETE', ...options }),
+};

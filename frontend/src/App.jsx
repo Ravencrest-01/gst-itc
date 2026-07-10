@@ -1,82 +1,35 @@
-import React from "react";
-import { createBrowserRouter, RouterProvider, Navigate } from "react-router-dom";
+import { useState } from 'react'
+import reactLogo from './assets/react.svg'
+import viteLogo from '/vite.svg'
+import './App.css'
 
-// Layouts & Auth
-import { RootLayout } from "./components/layout/RootLayout";
-import { RequireAuth } from "./components/layout/RequireAuth";
+function App() {
+  const [count, setCount] = useState(0)
 
-// Pages
-import { Login } from "./pages/Login";
-import { Dashboard } from "./pages/Dashboard";
-import { ClientsList } from "./pages/ClientsList";
-import { NewRun } from "./pages/NewRun";
-import { RunResults } from "./pages/RunResults";
-import { RunReview } from "./pages/RunReview";
-import { NotFound } from "./pages/NotFound";
-import { Register } from "./pages/Register";
-
-const router = createBrowserRouter([
-  {
-    path: "/login",
-    element: <Login />,
-  },
-  {
-    path: "/register",
-    element: <Register />,
-  },
-  {
-    path: "/",
-    element: <RequireAuth />,
-    children: [
-      {
-        element: <RootLayout />,
-        children: [
-          {
-            index: true,
-            element: <Navigate to="/dashboard" replace />,
-          },
-          {
-            path: "dashboard",
-            element: <Dashboard />,
-          },
-          {
-            path: "clients",
-            element: <ClientsList />,
-          },
-          {
-            path: "clients/:id",
-            element: <Dashboard />, // Subbing dashboard for client overview for now
-          },
-          {
-            path: "runs",
-            element: <Navigate to="/dashboard" replace />, // Runs list is on dashboard
-          },
-          {
-            path: "runs/new",
-            element: <NewRun />,
-          },
-          {
-            path: "runs/latest",
-            element: <RunResults />, // Stub route to hit RunResults
-          },
-          {
-            path: "runs/:runId",
-            element: <RunResults />,
-          },
-          {
-            path: "runs/:runId/review",
-            element: <RunReview />,
-          },
-          {
-            path: "*",
-            element: <NotFound />,
-          },
-        ],
-      },
-    ],
-  },
-]);
-
-export default function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <>
+      <div>
+        <a href="https://vite.dev" target="_blank">
+          <img src={viteLogo} className="logo" alt="Vite logo" />
+        </a>
+        <a href="https://react.dev" target="_blank">
+          <img src={reactLogo} className="logo react" alt="React logo" />
+        </a>
+      </div>
+      <h1>Vite + React</h1>
+      <div className="card">
+        <button onClick={() => setCount((count) => count + 1)}>
+          count is {count}
+        </button>
+        <p>
+          Edit <code>src/App.jsx</code> and save to test HMR
+        </p>
+      </div>
+      <p className="read-the-docs">
+        Click on the Vite and React logos to learn more
+      </p>
+    </>
+  )
 }
+
+export default App

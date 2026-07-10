@@ -1,20 +1,23 @@
-import React from "react";
-import { Navigate, useLocation, Outlet } from "react-router-dom";
-import { useAuth } from "@/context/AuthContext";
-import { LoadingPage } from "../states/Loading";
+import React from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { Loading } from '../states/States';
 
-export function RequireAuth() {
-  const { user, loading } = useAuth();
+export function RequireAuth({ children }) {
+  const { user, booting } = useAuth();
   const location = useLocation();
 
-  if (loading) {
-    return <LoadingPage />;
+  if (booting) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-background">
+        <Loading />
+      </div>
+    );
   }
 
   if (!user) {
-    // Redirect to login but save the attempted url
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  return <Outlet />;
+  return children;
 }

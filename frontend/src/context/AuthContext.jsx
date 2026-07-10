@@ -1,77 +1,74 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
-import { getMe, apiEvents } from "../api";
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { client } from '../api/client';
+import * as authApi from '../api/auth';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [workspaceType, setWorkspaceType] = useState(null);
+  const [booting, setBooting] = useState(true);
 
-  useEffect(() => {
-    // Check local storage for token
-    const token = localStorage.getItem("auth_token");
-    if (token) {
-      loadUser();
-    } else {
-      setLoading(false);
+  const loadSession = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setBooting(false);
+      return;
     }
-
-    // Listen for 401s
-    const handleUnauthorized = () => {
-      logout();
-    };
-    apiEvents.addEventListener("unauthorized", handleUnauthorized);
-
-    return () => {
-      apiEvents.removeEventListener("unauthorized", handleUnauthorized);
-    };
+    
+    try {
+      const data = await authApi.me();
+      setUser(data);
+      setWorkspaceType(data.workspace_type || 'firm'); // Fallback to firm if missing
+    } catch (err) {
+      if (err.status === 401) {
+        localStorage.removeItem('token');
+      }
+      // If network error, we could fallback to local storage cached user in a real app
+    } finally {
+      setBooting(false);
+    }
   }, []);
 
-  const loadUser = async () => {
-    try {
-      setLoading(true);
-      const data = await getMe();
-      setUser(data.user || data);
-    } catch (error) {
-      if (!error.isOffline) {
-        localStorage.removeItem("auth_token");
-        setUser(null);
-      }
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    loadSession();
+
+    const handleUnauthorized = () => {
+      setUser(null);
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized);
+  }, [loadSession]);
+
+  const login = async (credentials) => {
+    const data = await authApi.login(credentials);
+    localStorage.setItem('token', data.access_token);
+    await loadSession();
   };
 
-  const loginUser = async (credentials) => {
-    const { login } = await import('../api');
-    const data = await login(credentials);
-    localStorage.setItem("auth_token", data.access_token);
-    setUser(data.user);
-  };
-
-  const registerUser = async (registrationData) => {
-    const { register } = await import('../api');
-    const data = await register(registrationData);
-    localStorage.setItem("auth_token", data.access_token);
-    setUser(data.user);
+  const register = async (payload) => {
+    await authApi.register(payload);
+    // login logic happens either here or by user entering OTP
   };
 
   const logout = () => {
-    localStorage.removeItem("auth_token");
+    localStorage.removeItem('token');
+    localStorage.removeItem('activeClientId');
     setUser(null);
   };
 
+  const updateProfile = async (updates) => {
+    const data = await authApi.updateMe(updates);
+    setUser(data);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, login: loginUser, register: registerUser, logout, loadUser }}>
+    <AuthContext.Provider value={{ user, workspaceType, booting, login, register, logout, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
+  return useContext(AuthContext);
 }

@@ -1,120 +1,115 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/Card";
-import { Dropzone } from "@/components/ui/Dropzone";
-import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Select";
-import { useToast } from "@/context/ToastContext";
-import { createRun } from "@/api";
-import { FileSpreadsheet, FileJson, Play } from "lucide-react";
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useActiveClient } from '../context/ActiveClientContext';
+import * as runsApi from '../api/runs';
+import { PageHeader } from '../components/data/PageHeader';
+import { Card, CardBody } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Field, Select, Input } from '../components/ui/Field';
+import { useToast } from '../context/ToastContext';
 
-export function NewRun() {
-  const [prFile, setPrFile] = useState(null);
-  const [gstr2bFile, setGstr2bFile] = useState(null);
-  const [period, setPeriod] = useState("");
-  const [loading, setLoading] = useState(false);
+export default function NewRun() {
+  const { id } = useParams();
   const navigate = useNavigate();
-  const { toast } = useToast();
+  const { activeClient, setActive } = useActiveClient();
+  const toast = useToast();
 
-  const handleStartRun = async () => {
-    if (!prFile || !gstr2bFile || !period) {
-      toast({ title: "Validation Error", description: "Please upload both files and select a tax period.", variant: "destructive" });
-      return;
+  useEffect(() => {
+    if (id && activeClient?.id !== id) {
+      setActive(id);
     }
+  }, [id, activeClient, setActive]);
 
-    setLoading(true);
+  const [formData, setFormData] = useState({
+    financial_year: '2026-27',
+    tax_period: ''
+  });
+  const [running, setRunning] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setRunning(true);
     try {
-      const formData = new FormData();
-      formData.append("purchase_register", prFile);
-      formData.append("gstr_2b", gstr2bFile);
-      formData.append("tax_period", period);
-
-      const res = await createRun(formData);
-      
-      toast({ title: "Run Started", description: "Reconciliation engine successfully processed your files." });
-      
-      // The API returns { status: "success", run_id: "...", ... }
-      if (res.run_id || res.data?.run_id) {
-          navigate(`/runs/${res.run_id || res.data?.run_id}`);
-      } else {
-          navigate("/runs/latest");
-      }
+      const run = await runsApi.reconcile(id, formData);
+      toast.success('Reconciliation started');
+      navigate(`/runs/${run.id}`);
     } catch (err) {
-      toast({ title: "Error", description: err?.response?.data?.detail || err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
+      toast.error(err.message || 'Failed to start reconciliation');
+      setRunning(false);
     }
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight">New Reconciliation Run</h2>
-        <p className="text-muted-foreground">Upload your Purchase Register and GSTR-2B to start the matching engine.</p>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="New Reconciliation"
+        title={activeClient?.legal_name || 'Loading...'}
+        crumbs={[
+          { label: 'Companies', path: '/clients' }, 
+          { label: activeClient?.legal_name || 'Company', path: `/clients/${id}` }, 
+          { label: 'Reconciliations', path: `/clients/${id}/runs` },
+          { label: 'New Run' }
+        ]}
+      />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Tax Period</CardTitle>
-          <CardDescription>Select the filing month for this reconciliation.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Select value={period} onChange={(e) => setPeriod(e.target.value)} className="max-w-xs">
-            <option value="" disabled>Select Month...</option>
-            <option value="2026-04">April 2026</option>
-            <option value="2026-03">March 2026</option>
-            <option value="2026-02">February 2026</option>
-          </Select>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="max-w-xl">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileSpreadsheet className="h-5 w-5 text-primary" />
-              Purchase Register
-            </CardTitle>
-            <CardDescription>Your internal books (CSV or XLSX)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {prFile ? (
-              <div className="flex items-center justify-between p-4 rounded-md border bg-muted/50">
-                <span className="text-sm font-medium truncate">{prFile.name}</span>
-                <Button variant="ghost" size="sm" onClick={() => setPrFile(null)}>Remove</Button>
+          <CardBody>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="bg-accent/10 border border-accent/20 rounded-radius p-4 flex gap-3">
+                <span className="material-symbols-outlined text-accent shrink-0">info</span>
+                <p className="text-sm text-accent-foreground">
+                  Starting a new reconciliation will use all available Purchase Register and GSTR-2B files uploaded for the selected period. Ensure your files are up to date before proceeding.
+                </p>
               </div>
-            ) : (
-              <Dropzone onDrop={setPrFile} accept=".csv, .xlsx" />
-            )}
-          </CardContent>
-        </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileJson className="h-5 w-5 text-primary" />
-              GSTR-2B
-            </CardTitle>
-            <CardDescription>Portal auto-draft (JSON or XLSX)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {gstr2bFile ? (
-              <div className="flex items-center justify-between p-4 rounded-md border bg-muted/50">
-                <span className="text-sm font-medium truncate">{gstr2bFile.name}</span>
-                <Button variant="ghost" size="sm" onClick={() => setGstr2bFile(null)}>Remove</Button>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Financial Year">
+                  <Select 
+                    value={formData.financial_year} 
+                    onChange={(e) => setFormData(p => ({ ...p, financial_year: e.target.value }))}
+                    required
+                  >
+                    <option value="2026-27">2026-27</option>
+                    <option value="2025-26">2025-26</option>
+                  </Select>
+                </Field>
+
+                <Field label="Tax Period" hint="Leave blank to run for entire FY">
+                  <Input 
+                    value={formData.tax_period} 
+                    onChange={(e) => setFormData(p => ({ ...p, tax_period: e.target.value }))}
+                    placeholder="Optional (e.g. Apr)"
+                  />
+                </Field>
               </div>
-            ) : (
-              <Dropzone onDrop={setGstr2bFile} accept=".json, .xlsx" />
-            )}
-          </CardContent>
-        </Card>
-      </div>
 
-      <div className="flex justify-end">
-        <Button size="lg" onClick={handleStartRun} isLoading={loading}>
-          <Play className="mr-2 h-4 w-4" />
-          Run Reconciliation Engine
-        </Button>
+              <div className="flex gap-3 pt-4 border-t border-border">
+                <Button 
+                  type="button" 
+                  variant="ghost" 
+                  onClick={() => navigate(`/clients/${id}/runs`)}
+                  disabled={running}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  variant="primary" 
+                  className="flex-1"
+                  disabled={running}
+                >
+                  {running ? (
+                    <>
+                      <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
+                      Running reconciliation...
+                    </>
+                  ) : 'Start reconciliation'}
+                </Button>
+              </div>
+            </form>
+          </CardBody>
+        </Card>
       </div>
     </div>
   );

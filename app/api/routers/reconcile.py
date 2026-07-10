@@ -9,13 +9,12 @@ from app.core.dependencies import get_current_tenant_context, require_active_cli
 from app.models.domain import ReconciliationRun, PurchaseInvoice, PortalInvoice, MatchResult, UploadedFile
 from app.models.enums import RunStatusEnum, FileKindEnum, BucketEnum
 from app.schemas.domain import RunOut, ReconciliationSummary, MatchUpdate
-from app.services.ingestion import ingest_file
-from app.services.matcher import run_reconciliation_pass
+from app.services.reconciliation import ingest_file, reconcile, ReconciliationConfig
 
 router = APIRouter()
 
 @router.post("/reconcile")
-def run_reconciliation(
+def run_reconciliation_endpoint(
     purchase_register: UploadFile = File(...),
     gstr_2b: UploadFile = File(...),
     ctx: TenantContext = Depends(require_active_client),
@@ -26,31 +25,82 @@ def run_reconciliation(
     db.add(run)
     db.flush()
     
+    config = ReconciliationConfig()
+    
     # Process PR
     pr_content = purchase_register.file.read()
-    pr_result = ingest_file(pr_content, purchase_register.filename)
-    
-    pr_invoices = [
-        PurchaseInvoice(run_id=run.id, **row) 
-        for row in pr_result.rows
-    ]
-    db.bulk_save_objects(pr_invoices)
+    pr_result = ingest_file(pr_content, kind="purchase_register", config=config)
     
     # Process 2B
     po_content = gstr_2b.file.read()
-    po_result = ingest_file(po_content, gstr_2b.filename)
+    po_result = ingest_file(po_content, kind="gstr_2b", config=config)
     
-    po_invoices = [
-        PortalInvoice(run_id=run.id, **row) 
-        for row in po_result.rows
-    ]
-    db.bulk_save_objects(po_invoices)
+    # Run Engine
+    matches, summary = reconcile(pr_result.rows, po_result.rows, config)
     
-    run.total_records = len(pr_invoices) + len(po_invoices)
+    # We must save invoices to DB to get IDs
+    pr_db_invoices = []
+    for row in pr_result.rows:
+        inv = PurchaseInvoice(
+            run_id=run.id,
+            supplier_gstin=row.supplier_gstin,
+            supplier_name=row.supplier_name,
+            invoice_number=row.invoice_number,
+            invoice_number_norm=row.invoice_number_norm,
+            invoice_date=row.invoice_date,
+            taxable_value=row.taxable_value,
+            cgst=row.cgst,
+            sgst=row.sgst,
+            igst=row.igst,
+            cess=row.cess,
+            total_tax=row.total_tax
+        )
+        pr_db_invoices.append(inv)
+        # Store object ref to fetch ID later
+        row.raw_data["_db_obj"] = inv 
+        
+    twob_db_invoices = []
+    for row in po_result.rows:
+        inv = PortalInvoice(
+            run_id=run.id,
+            supplier_gstin=row.supplier_gstin,
+            supplier_name=row.supplier_name,
+            invoice_number=row.invoice_number,
+            invoice_number_norm=row.invoice_number_norm,
+            invoice_date=row.invoice_date,
+            taxable_value=row.taxable_value,
+            cgst=row.cgst,
+            sgst=row.sgst,
+            igst=row.igst,
+            cess=row.cess,
+            total_tax=row.total_tax
+        )
+        twob_db_invoices.append(inv)
+        row.raw_data["_db_obj"] = inv
+        
+    db.add_all(pr_db_invoices)
+    db.add_all(twob_db_invoices)
+    db.flush() # Now all invoices have IDs!
     
-    # Execute matching
-    matches_created = run_reconciliation_pass(db, run.id)
+    db_matches = []
+    for m in matches:
+        pr_id = m.purchase_invoice.raw_data["_db_obj"].id if m.purchase_invoice else None
+        po_id = m.portal_invoice.raw_data["_db_obj"].id if m.portal_invoice else None
+        
+        db_matches.append(MatchResult(
+            run_id=run.id,
+            purchase_invoice_id=pr_id,
+            portal_invoice_id=po_id,
+            bucket=BucketEnum(m.bucket.value),
+            match_pass=m.match_pass.value if m.match_pass else None,
+            confidence=m.confidence,
+            tax_diff=m.tax_diff,
+            review_status=m.review_status.value
+        ))
+        
+    db.bulk_save_objects(db_matches)
     
+    run.total_records = summary.total
     run.status = RunStatusEnum.completed
     db.commit()
     

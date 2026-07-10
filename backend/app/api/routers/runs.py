@@ -61,6 +61,33 @@ def create_run(
         total_records_committed=0
     )
 
+@router.get("/runs/recent", response_model=RunListResponse)
+def list_recent_runs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    query = db.query(ReconciliationRun).filter(ReconciliationRun.workspace_id == current_user.workspace_id)
+    runs = query.order_by(ReconciliationRun.created_at.desc()).limit(10).all()
+    
+    items = []
+    for r in runs:
+        client = db.query(Client).filter(Client.id == r.client_id).first()
+        client_name = client.legal_name if client else "Unknown Client"
+        
+        items.append({
+            "id": r.id,
+            "client_id": r.client_id,
+            "client_name": client_name,
+            "financial_year": r.financial_year,
+            "tax_period": r.tax_period,
+            "status": r.status,
+            "invoices": 0,
+            "matched_percentage": 0.0,
+            "itc_at_risk": 0.0,
+            "created_on": r.created_at
+        })
+    return RunListResponse(items=items, total=len(items))
+
 @router.get("/clients/{id}/runs", response_model=RunListResponse)
 def list_runs(
     id: uuid.UUID,
@@ -77,9 +104,13 @@ def list_runs(
     
     items = []
     for r in runs:
+        client = db.query(Client).filter(Client.id == r.client_id).first()
+        client_name = client.legal_name if client else "Unknown Client"
+        
         items.append(RunResponse(
             id=r.id,
             client_id=r.client_id,
+            client_name=client_name,
             financial_year=r.financial_year,
             tax_period=r.tax_period,
             status=r.status,

@@ -18,6 +18,7 @@ class RunCreateResponse(BaseModel):
 class RunResponse(BaseModel):
     id: UUID
     client_id: UUID
+    client_name: Optional[str] = None
     financial_year: str
     tax_period: str
     status: RunStatus

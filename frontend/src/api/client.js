@@ -52,7 +52,15 @@ async function request(endpoint, options = {}) {
     }
     
     if (!response.ok) {
-      throw new ApiError(data?.detail || 'An API error occurred', response.status);
+      let errorMessage = data?.detail || 'An API error occurred';
+      if (Array.isArray(errorMessage)) {
+        // FastAPI returns array of validation errors for 422
+        errorMessage = errorMessage.map(err => {
+          const field = err.loc && err.loc.length > 1 ? err.loc[1] : 'Field';
+          return `${field}: ${err.msg}`;
+        }).join(', ');
+      }
+      throw new ApiError(errorMessage, response.status);
     }
     
     return data;

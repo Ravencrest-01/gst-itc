@@ -18,7 +18,7 @@ export default function Onboarding() {
   const [formData, setFormData] = useState({
     legal_name: '',
     gstin: '',
-    state: ''
+    state_code: ''
   });
 
   const handleChange = (field, value) => {
@@ -76,8 +76,8 @@ export default function Onboarding() {
 
           <Field label="State Code">
             <Select 
-              value={formData.state} 
-              onChange={(e) => handleChange('state', e.target.value)} 
+              value={formData.state_code} 
+              onChange={(e) => handleChange('state_code', e.target.value)} 
               required
             >
               <option value="">Select State</option>

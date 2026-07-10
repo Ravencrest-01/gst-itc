@@ -17,7 +17,7 @@ export default function Clients() {
   const toast = useToast();
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ legal_name: '', gstin: '', state: '' });
+  const [formData, setFormData] = useState({ legal_name: '', gstin: '', state_code: '' });
   const [submitting, setSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
 
@@ -29,7 +29,7 @@ export default function Clients() {
       await refresh();
       toast.success('Company added');
       setAddModalOpen(false);
-      setFormData({ legal_name: '', gstin: '', state: '' });
+      setFormData({ legal_name: '', gstin: '', state_code: '' });
     } catch (err) {
       toast.error(err.message || 'Failed to add company');
     } finally {
@@ -157,8 +157,8 @@ export default function Clients() {
           </Field>
           <Field label="State Code">
             <Select 
-              value={formData.state} 
-              onChange={(e) => setFormData(p => ({ ...p, state: e.target.value }))} 
+              value={formData.state_code} 
+              onChange={(e) => setFormData(p => ({ ...p, state_code: e.target.value }))} 
               required
             >
               <option value="">Select State</option>

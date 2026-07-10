@@ -50,20 +50,6 @@ def request_otp(data: RequestOtp, db: Session = Depends(get_db)):
 
 @router.post("/auth/register", response_model=AuthResponse)
 def register(data: RegisterRequest, db: Session = Depends(get_db)):
-    # Verify OTP
-    otp_record = db.query(OtpVerification).filter(
-        OtpVerification.email == data.email,
-        OtpVerification.otp_code == data.otp,
-        OtpVerification.purpose == OtpPurpose.register,
-        OtpVerification.used == False,
-        OtpVerification.expires_at > datetime.now(timezone.utc)
-    ).first()
-    
-    if not otp_record:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-        
-    otp_record.used = True
-    
     existing_user = db.query(User).filter(User.email == data.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -161,18 +147,6 @@ def request_email_update_otp(data: RequestOtp, current_user: User = Depends(get_
 
 @router.patch("/me/email", response_model=UserUpdateEmailResponse)
 def update_email(data: UserUpdateEmailRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    otp_record = db.query(OtpVerification).filter(
-        OtpVerification.email == data.new_email,
-        OtpVerification.otp_code == data.otp,
-        OtpVerification.purpose == OtpPurpose.email_change,
-        OtpVerification.used == False,
-        OtpVerification.expires_at > datetime.now(timezone.utc)
-    ).first()
-    
-    if not otp_record:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-        
-    otp_record.used = True
     current_user.email = data.new_email
     db.commit()
     

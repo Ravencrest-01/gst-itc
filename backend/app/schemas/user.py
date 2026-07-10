@@ -20,7 +20,6 @@ class UserUpdateNameResponse(BaseModel):
 
 class UserUpdateEmailRequest(BaseModel):
     new_email: EmailStr
-    otp: str
 
 class UserUpdateEmailResponse(BaseModel):
     id: UUID

@@ -177,12 +177,58 @@ def get_run_summary(id: uuid.UUID, ctx: TenantContext = Depends(require_active_c
         .where(MatchResult.bucket.in_([BucketEnum.mismatched, BucketEnum.missing_in_portal]))
     ).scalar() or 0.0
     
+    # Calculate ITC recovered (matched/probable from Books)
+    recovered = db.execute(
+        select(func.sum(PurchaseInvoice.total_tax))
+        .join(MatchResult, MatchResult.purchase_invoice_id == PurchaseInvoice.id)
+        .where(MatchResult.run_id == id)
+        .where(MatchResult.bucket.in_([BucketEnum.matched, BucketEnum.probable]))
+    ).scalar() or 0.0
+    
     return ReconciliationSummary(
         counts=count_dict,
         itc_at_risk=float(at_risk),
-        itc_recovered=0.0,
+        itc_recovered=float(recovered),
         total=sum(count_dict.values())
     )
+
+@router.get("/dashboard/kpis")
+def get_dashboard_kpis(ctx: TenantContext = Depends(require_active_client), db: Session = Depends(get_db)):
+    total_itc = db.execute(
+        select(func.sum(PurchaseInvoice.total_tax))
+        .join(ReconciliationRun, PurchaseInvoice.run_id == ReconciliationRun.id)
+        .where(ReconciliationRun.client_id == ctx.active_client.id)
+    ).scalar() or 0.0
+    
+    safe_to_claim = db.execute(
+        select(func.sum(PurchaseInvoice.total_tax))
+        .join(MatchResult, MatchResult.purchase_invoice_id == PurchaseInvoice.id)
+        .join(ReconciliationRun, MatchResult.run_id == ReconciliationRun.id)
+        .where(ReconciliationRun.client_id == ctx.active_client.id)
+        .where(MatchResult.bucket.in_([BucketEnum.matched, BucketEnum.probable]))
+    ).scalar() or 0.0
+    
+    at_risk = db.execute(
+        select(func.sum(MatchResult.tax_diff))
+        .join(ReconciliationRun, MatchResult.run_id == ReconciliationRun.id)
+        .where(ReconciliationRun.client_id == ctx.active_client.id)
+        .where(MatchResult.bucket.in_([BucketEnum.mismatched, BucketEnum.missing_in_portal]))
+    ).scalar() or 0.0
+    
+    vendors_action_req = db.execute(
+        select(func.count(func.distinct(PurchaseInvoice.supplier_gstin)))
+        .join(MatchResult, MatchResult.purchase_invoice_id == PurchaseInvoice.id)
+        .join(ReconciliationRun, MatchResult.run_id == ReconciliationRun.id)
+        .where(ReconciliationRun.client_id == ctx.active_client.id)
+        .where(MatchResult.bucket.in_([BucketEnum.mismatched, BucketEnum.missing_in_portal]))
+    ).scalar() or 0
+    
+    return {
+        "totalItcAvailable": float(total_itc),
+        "safeToClaim": float(safe_to_claim),
+        "atRisk": float(at_risk),
+        "vendorsActionRequired": vendors_action_req
+    }
 
 @router.get("/runs/{id}/results")
 def get_run_results(id: uuid.UUID, ctx: TenantContext = Depends(require_active_client), db: Session = Depends(get_db)):

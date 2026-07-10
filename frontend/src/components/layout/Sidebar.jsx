@@ -13,8 +13,6 @@ const navItems = [
   { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
   { icon: Users, label: "Clients", href: "/clients" },
   { icon: FileText, label: "Reconciliations", href: "/runs" },
-  { icon: PieChart, label: "Reports", href: "/reports" },
-  { icon: Settings, label: "Settings", href: "/settings/profile" },
 ];
 
 export function Sidebar() {

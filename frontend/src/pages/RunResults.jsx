@@ -35,7 +35,7 @@ export function RunResults() {
             gstin: item.gstin || "Unknown GSTIN",
             invoice_no: item.invoice_no || "N/A",
             date: item.date || "N/A",
-            tax_amount: item.tax_amount || 0,
+            tax_amount: item.pr_tax || item.po_tax || 0,
             status: item.bucket,
             tax_diff: item.tax_diff
         }));

@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/states/EmptyState";
 import { formatINR, formatDate, STATUS_UI, MATCH_STATUS } from "@/lib/utils";
 import { FilePlus, TrendingUp, AlertCircle, FileText, FileIcon, Download } from "lucide-react";
 import { useActiveClient } from "@/context/ActiveClientContext";
-import { getClientRuns, listFiles } from "@/api";
+import { listRecentRuns, listFiles, getDashboardKpis } from "@/api";
 
 export function Dashboard() {
   const { activeClientId } = useActiveClient();
@@ -27,23 +27,14 @@ export function Dashboard() {
       }
       try {
         setLoading(true);
-        const [runsRes, filesRes] = await Promise.all([
-          getClientRuns(activeClientId),
+        const [kpisRes, runsRes, filesRes] = await Promise.all([
+          getDashboardKpis(),
+          listRecentRuns(),
           listFiles(activeClientId)
         ]);
         
-        // Mocking KPIs for now since backend doesn't have a real KPI endpoint yet,
-        // but we'll base it on real run count
-        const realRuns = runsRes.data?.items || runsRes.items || [];
-        
-        setKpis({
-          totalItcAvailable: 4520000.50,
-          safeToClaim: 3850000.00,
-          atRisk: 670000.50,
-          vendorsActionRequired: realRuns.length
-        });
-        
-        setRuns(realRuns);
+        setKpis(kpisRes.data || kpisRes);
+        setRuns(runsRes.data?.runs || runsRes.runs || []);
         setFiles(filesRes.data?.items || filesRes.items || []);
         setError(null);
       } catch (err) {

@@ -70,14 +70,6 @@ const router = createBrowserRouter([
             element: <RunReview />,
           },
           {
-            path: "reports",
-            element: <Reports />, // Render real Reports instead of Stub
-          },
-          {
-            path: "settings/*",
-            element: <SettingsStub />,
-          },
-          {
             path: "*",
             element: <NotFound />,
           },

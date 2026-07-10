@@ -108,10 +108,6 @@ export function Topbar() {
               <div className="px-2 py-1.5 text-sm font-medium border-b mb-1 sm:hidden">
                 {user?.name}
               </div>
-              <Link to="/settings/profile" className="flex items-center w-full rounded-sm px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground">
-                <User className="mr-2 h-4 w-4" />
-                Profile Settings
-              </Link>
               <button 
                 onClick={handleLogout}
                 className="flex items-center w-full rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10"

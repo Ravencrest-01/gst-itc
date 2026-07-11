@@ -1,6 +1,7 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.core.database import get_db
 from app.schemas.run import (
     RunCreateRequest, RunCreateResponse, RunResponse, RunListResponse,
@@ -163,14 +164,29 @@ def get_run_summary(
                 if inv:
                     itc_recovered += (inv.total_tax or 0.0)
             
-    pr_total = db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == id).count()
-    po_total = db.query(PortalInvoice).filter(PortalInvoice.run_id == id).count()
+    pr_tax_sum = db.query(func.sum(PurchaseInvoice.total_tax)).filter(PurchaseInvoice.run_id == id).scalar() or 0.0
+    po_tax_sum = db.query(func.sum(PortalInvoice.total_tax)).filter(PortalInvoice.run_id == id).scalar() or 0.0
+            
+    pr_total_rows = db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == id).count()
+    po_total_rows = db.query(PortalInvoice).filter(PortalInvoice.run_id == id).count()
+    
+    match_rate = 0.0
+    if pr_total_rows > 0:
+        match_rate = round((matched / pr_total_rows) * 100, 1)
     
     return RunSummaryResponse(
+        id=run.id,
+        client_id=run.client_id,
+        financial_year=run.financial_year,
+        tax_period=run.tax_period,
+        status=run.status,
         counts=counts,
         itc_at_risk=itc_at_risk,
         itc_recovered=itc_recovered,
-        total=pr_total + po_total
+        pr_total=pr_tax_sum,
+        gstr2b_total=po_tax_sum,
+        match_rate=match_rate,
+        total=pr_total_rows + po_total_rows
     )
 
 @router.get("/runs/{id}/matches", response_model=MatchRowListResponse)

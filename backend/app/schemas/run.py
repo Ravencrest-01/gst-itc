@@ -39,9 +39,17 @@ class RunSummaryCounts(BaseModel):
     probable: int
 
 class RunSummaryResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    financial_year: str
+    tax_period: str
+    status: RunStatus
     counts: RunSummaryCounts
     itc_at_risk: float
     itc_recovered: float
+    pr_total: float
+    gstr2b_total: float
+    match_rate: float
     total: int
 
 class MatchRowResponse(BaseModel):

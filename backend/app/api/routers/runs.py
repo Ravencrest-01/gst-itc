@@ -30,6 +30,8 @@ from typing import Optional
 
 router = APIRouter()
 
+from fastapi import BackgroundTasks
+
 @router.post("/clients/{id}/runs", response_model=RunCreateResponse)
 def create_run(
     id: uuid.UUID,
@@ -50,10 +52,18 @@ def create_run(
     db.commit()
     db.refresh(run)
     
-    # Mocking matching process logic
-    # In a real engine, we'd read purchase_file_id and portal_file_id, normalize, and match
-    run.status = RunStatus.completed
+    # We optionally link the uploaded files to this run.
+    if data.purchase_file_id:
+        f1 = db.query(UploadedFile).filter(UploadedFile.id == data.purchase_file_id).first()
+        if f1: f1.run_id = run.id
+    if data.portal_file_id:
+        f2 = db.query(UploadedFile).filter(UploadedFile.id == data.portal_file_id).first()
+        if f2: f2.run_id = run.id
     db.commit()
+    
+    # Trigger matching process synchronously for the MVP to avoid DB session closed issues
+    from app.services.matcher import run_reconciliation
+    run_reconciliation(run.id, db)
     
     return RunCreateResponse(
         id=run.id,
@@ -131,15 +141,35 @@ def get_run_summary(
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
         
+    matched = db.query(MatchResult).filter(MatchResult.run_id == id, MatchResult.bucket == Bucket.matched).count()
+    mismatched = db.query(MatchResult).filter(MatchResult.run_id == id, MatchResult.bucket == Bucket.mismatched).count()
+    missing_portal = db.query(MatchResult).filter(MatchResult.run_id == id, MatchResult.bucket == Bucket.missing_in_portal).count()
+    missing_books = db.query(MatchResult).filter(MatchResult.run_id == id, MatchResult.bucket == Bucket.missing_in_books).count()
+    probable = db.query(MatchResult).filter(MatchResult.run_id == id, MatchResult.bucket == Bucket.probable).count()
+    
     counts = RunSummaryCounts(
-        matched=0, mismatched=0, missing_in_portal=0, missing_in_books=0, probable=0
+        matched=matched, mismatched=mismatched, missing_in_portal=missing_portal, missing_in_books=missing_books, probable=probable
     )
+    
+    itc_at_risk = 0.0
+    itc_recovered = 0.0
+    for m in db.query(MatchResult).filter(MatchResult.run_id == id).all():
+        if m.bucket in [Bucket.missing_in_portal, Bucket.mismatched]:
+            itc_at_risk += abs(m.tax_diff or 0.0)
+        elif m.bucket in [Bucket.matched, Bucket.probable]:
+            if m.purchase_invoice_id:
+                inv = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == m.purchase_invoice_id).first()
+                if inv:
+                    itc_recovered += (inv.total_tax or 0.0)
+            
+    pr_total = db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == id).count()
+    po_total = db.query(PortalInvoice).filter(PortalInvoice.run_id == id).count()
     
     return RunSummaryResponse(
         counts=counts,
-        itc_at_risk=0.0,
-        itc_recovered=0.0,
-        total=0
+        itc_at_risk=itc_at_risk,
+        itc_recovered=itc_recovered,
+        total=pr_total + po_total
     )
 
 @router.get("/runs/{id}/matches", response_model=MatchRowListResponse)
@@ -166,7 +196,33 @@ def get_run_matches(
     matches = query.offset((page - 1) * page_size).limit(page_size).all()
     
     items = []
-    # Real logic would join PurchaseInvoice / PortalInvoice to construct the flat row response
+    for m in matches:
+        inv = None
+        source = None
+        if m.purchase_invoice_id:
+            inv = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == m.purchase_invoice_id).first()
+            source = "PR"
+        elif m.portal_invoice_id:
+            inv = db.query(PortalInvoice).filter(PortalInvoice.id == m.portal_invoice_id).first()
+            source = "GSTR-2B"
+            
+        if inv:
+            items.append(MatchRowResponse(
+                id=m.id,
+                bucket=m.bucket,
+                match_pass=m.match_pass,
+                confidence=m.confidence,
+                tax_diff=m.tax_diff,
+                supplier_gstin=inv.supplier_gstin,
+                supplier_name=inv.supplier_name,
+                invoice_number=inv.invoice_number,
+                invoice_date=inv.invoice_date,
+                taxable_value=inv.taxable_value,
+                total_tax=inv.total_tax,
+                source=source,
+                review_status=m.review_status
+            ))
+    
     return MatchRowListResponse(items=items, total=total, page=page, page_size=page_size)
 
 @router.patch("/runs/{id}/matches/{matchId}", response_model=ReviewMatchResponse)

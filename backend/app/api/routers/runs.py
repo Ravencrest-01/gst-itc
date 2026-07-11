@@ -22,7 +22,8 @@ class RunStatusUpdateResponse(BaseModel):
     status: str
 
 from app.models.models import (
-    ReconciliationRun, Client, User, UploadedFile, MatchResult, RunStatus, Bucket, ReviewStatus
+    ReconciliationRun, Client, User, UploadedFile, MatchResult, RunStatus, Bucket, ReviewStatus,
+    PurchaseInvoice, PortalInvoice
 )
 from app.api.dependencies.client import get_current_client
 from app.api.dependencies.auth import get_current_user

@@ -169,7 +169,7 @@ export default function Files() {
           <Field label="File Kind">
             <Select value={kind} onChange={(e) => setKind(e.target.value)} required>
               <option value="pr">Purchase Register (Excel/CSV)</option>
-              <option value="2b">GSTR-2B (JSON)</option>
+              <option value="2b">GSTR-2B (JSON/Excel/CSV)</option>
             </Select>
           </Field>
 
@@ -192,8 +192,8 @@ export default function Files() {
 
           <Field label="File">
             <Dropzone 
-              label={`Drop your ${kind === 'pr' ? 'Excel/CSV' : 'JSON'} file here`}
-              accept={kind === 'pr' ? '.xlsx,.csv' : '.json'}
+              label={`Drop your ${kind === 'pr' ? 'Excel/CSV' : 'JSON/Excel/CSV'} file here`}
+              accept={kind === 'pr' ? '.xlsx,.csv,.xls' : '.json,.xlsx,.csv,.xls'}
               file={fileObj}
               onFile={setFileObj}
             />

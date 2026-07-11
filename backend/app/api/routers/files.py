@@ -30,12 +30,19 @@ def upload_file(
     if kind not in [FileKind.purchase_register, FileKind.gstr_2b]:
         raise HTTPException(status_code=400, detail="Invalid kind")
         
+    ext = os.path.splitext(file.filename)[1].lower()
+    if kind == FileKind.purchase_register and ext not in ['.csv', '.xlsx', '.xls']:
+        raise HTTPException(status_code=400, detail="Purchase register must be CSV or Excel")
+    if kind == FileKind.gstr_2b and ext not in ['.csv', '.xlsx', '.xls', '.json']:
+        raise HTTPException(status_code=400, detail="GSTR-2B must be JSON, CSV, or Excel")
+        
     file_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
     byte_size = os.path.getsize(file_path)
     if byte_size > 10 * 1024 * 1024: # 10MB limit for example
+        os.remove(file_path)
         raise HTTPException(status_code=400, detail="File too large")
         
     uploaded_file = UploadedFileModel(

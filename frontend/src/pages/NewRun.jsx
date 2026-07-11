@@ -58,9 +58,20 @@ export default function NewRun() {
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="bg-accent/10 border border-accent/20 rounded-radius p-4 flex gap-3">
                 <span className="material-symbols-outlined text-accent shrink-0">info</span>
-                <p className="text-sm text-accent-foreground">
-                  Starting a new reconciliation will use all available Purchase Register and GSTR-2B files uploaded for the selected period. Ensure your files are up to date before proceeding.
-                </p>
+                <div className="text-sm text-accent-foreground space-y-2">
+                  <p>
+                    Starting a new reconciliation will use all available Purchase Register and GSTR-2B files uploaded for the selected period. Ensure your files are up to date before proceeding.
+                  </p>
+                  <p>
+                    <button 
+                      type="button"
+                      onClick={() => navigate(`/clients/${id}/files`)}
+                      className="font-semibold underline hover:text-accent"
+                    >
+                      Go to Upload Files
+                    </button>
+                  </p>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

@@ -22,7 +22,7 @@ def upload_file(
     file: UploadFile = File(...),
     kind: FileKind = Form(...),
     financial_year: str = Form(...),
-    tax_period: str = Form(...),
+    tax_period: Optional[str] = Form(None),
     client: Client = Depends(get_current_client),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)

@@ -9,13 +9,11 @@ export function upload(clientId, fileObj, kind, financialYear, taxPeriod) {
   formData.append('file', fileObj);
   formData.append('kind', kind);
   formData.append('financial_year', financialYear);
-  formData.append('tax_period', taxPeriod);
+  if (taxPeriod) {
+    formData.append('tax_period', taxPeriod);
+  }
 
-  return client.post(`/clients/${clientId}/files`, formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  return client.post(`/clients/${clientId}/files`, formData);
 }
 
 export function remove(fileId) {

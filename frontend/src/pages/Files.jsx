@@ -30,7 +30,7 @@ export default function Files() {
 
   const [isModalOpen, setModalOpen] = useState(false);
   const [fileObj, setFileObj] = useState(null);
-  const [kind, setKind] = useState('pr');
+  const [kind, setKind] = useState('purchase_register');
   const [financialYear, setFinancialYear] = useState('2026-27');
   const [taxPeriod, setTaxPeriod] = useState('');
   
@@ -39,7 +39,7 @@ export default function Files() {
 
   const openAdd = () => {
     setFileObj(null);
-    setKind('pr');
+    setKind('purchase_register');
     setTaxPeriod('');
     setModalOpen(true);
   };
@@ -127,14 +127,14 @@ export default function Files() {
               <tbody>
                 {filesList.map((file) => (
                   <tr key={file.id} className="group">
-                    <td className="font-medium text-foreground">{file.original_filename}</td>
+                    <td className="font-medium text-foreground">{file.filename}</td>
                     <td>
-                      <Badge tone={file.kind === 'pr' ? 'blue' : 'neutral'}>
-                        {file.kind === 'pr' ? 'Purchase Register' : 'GSTR-2B'}
+                      <Badge tone={file.kind === 'purchase_register' ? 'blue' : 'neutral'}>
+                        {file.kind === 'purchase_register' ? 'Purchase Register' : 'GSTR-2B'}
                       </Badge>
                     </td>
                     <td>{file.financial_year} • {file.tax_period || 'All'}</td>
-                    <td className="text-muted-foreground">{formatSize(file.size_bytes)}</td>
+                    <td className="text-muted-foreground">{formatSize(file.byte_size)}</td>
                     <td className="text-right">
                       <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button 
@@ -168,8 +168,8 @@ export default function Files() {
         <form id="upload-form" onSubmit={handleUpload} className="space-y-6">
           <Field label="File Kind">
             <Select value={kind} onChange={(e) => setKind(e.target.value)} required>
-              <option value="pr">Purchase Register (Excel/CSV)</option>
-              <option value="2b">GSTR-2B (JSON/Excel/CSV)</option>
+              <option value="purchase_register">Purchase Register (Excel/CSV)</option>
+              <option value="gstr_2b">GSTR-2B (JSON/Excel/CSV)</option>
             </Select>
           </Field>
 
@@ -192,8 +192,8 @@ export default function Files() {
 
           <Field label="File">
             <Dropzone 
-              label={`Drop your ${kind === 'pr' ? 'Excel/CSV' : 'JSON/Excel/CSV'} file here`}
-              accept={kind === 'pr' ? '.xlsx,.csv,.xls' : '.json,.xlsx,.csv,.xls'}
+              label={`Drop your ${kind === 'purchase_register' ? 'Excel/CSV' : 'JSON/Excel/CSV'} file here`}
+              accept={kind === 'purchase_register' ? '.xlsx,.csv,.xls' : '.json,.xlsx,.csv,.xls'}
               file={fileObj}
               onFile={setFileObj}
             />

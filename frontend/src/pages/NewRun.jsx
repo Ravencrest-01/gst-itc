@@ -30,40 +30,35 @@ export default function NewRun() {
   const [running, setRunning] = useState(false);
 
   // File Upload State
-  const [isModalOpen, setModalOpen] = useState(false);
-  const [fileObj, setFileObj] = useState(null);
-  const [kind, setKind] = useState('purchase_register');
-  const [uploading, setUploading] = useState(false);
-
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    if (!fileObj) {
-      toast.error('Please select a file');
-      return;
-    }
-    setUploading(true);
-    try {
-      await filesApi.upload(id, fileObj, kind, formData.financial_year, formData.tax_period);
-      toast.success('File uploaded successfully');
-      setModalOpen(false);
-    } catch (err) {
-      toast.error(err.message || 'Failed to upload file');
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const openUpload = () => {
-    setFileObj(null);
-    setKind('purchase_register');
-    setModalOpen(true);
-  };
+  const [prFile, setPrFile] = useState(null);
+  const [gstr2bFile, setGstr2bFile] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setRunning(true);
     try {
-      const run = await runsApi.reconcile(id, formData);
+      let prFileId = null;
+      let gstr2bFileId = null;
+
+      // Upload files first if provided
+      if (prFile) {
+        const prRes = await filesApi.upload(id, prFile, 'purchase_register', formData.financial_year, formData.tax_period);
+        prFileId = prRes.id;
+      }
+      
+      if (gstr2bFile) {
+        const gstr2bRes = await filesApi.upload(id, gstr2bFile, 'gstr_2b', formData.financial_year, formData.tax_period);
+        gstr2bFileId = gstr2bRes.id;
+      }
+
+      // Create run with the file IDs (or existing files if ids are null but periods match)
+      const runPayload = {
+        ...formData,
+        purchase_file_id: prFileId,
+        portal_file_id: gstr2bFileId
+      };
+
+      const run = await runsApi.reconcile(id, runPayload);
       toast.success('Reconciliation started');
       navigate(`/runs/${run.id}`);
     } catch (err) {
@@ -85,30 +80,11 @@ export default function NewRun() {
         ]}
       />
 
-      <div className="max-w-xl">
+      <div className="max-w-3xl">
         <Card>
           <CardBody>
-            <form onSubmit={handleSubmit} className="space-y-6">
-              <div className="bg-accent/10 border border-accent/20 rounded-radius p-4 flex gap-3">
-                <span className="material-symbols-outlined text-accent shrink-0">info</span>
-                <div className="text-sm text-accent-foreground space-y-3">
-                  <p>
-                    Starting a new reconciliation will use all available Purchase Register and GSTR-2B files uploaded for the selected period. Ensure your files are up to date before proceeding.
-                  </p>
-                  <p>
-                    <Button 
-                      type="button"
-                      variant="outline"
-                      onClick={openUpload}
-                      className="bg-white"
-                    >
-                      <span className="material-symbols-outlined mr-2">upload</span>
-                      Upload files now
-                    </Button>
-                  </p>
-                </div>
-              </div>
-
+            <form onSubmit={handleSubmit} className="space-y-8">
+              
               <div className="grid grid-cols-2 gap-4">
                 <Field label="Financial Year">
                   <Select 
@@ -130,7 +106,36 @@ export default function NewRun() {
                 </Field>
               </div>
 
-              <div className="flex gap-3 pt-4 border-t border-border">
+              <div className="space-y-4">
+                <h3 className="font-semibold text-lg">Upload Files</h3>
+                <p className="text-sm text-muted-foreground">
+                  Upload your Purchase Register and GSTR-2B files for the selected period. If you already uploaded them from the Files tab, you can leave these blank.
+                </p>
+                
+                <div className="grid grid-cols-2 gap-6">
+                  <Field label="Purchase Register">
+                    <Dropzone 
+                      label="Drop Excel/CSV file here"
+                      accept=".xlsx,.csv,.xls"
+                      file={prFile}
+                      onFile={setPrFile}
+                    />
+                    {prFile && <div className="mt-2 text-xs text-blue-600 bg-blue-50 p-2 rounded border border-blue-100 flex items-center"><span className="material-symbols-outlined text-[16px] mr-1">check_circle</span> Tagged as Purchase Register</div>}
+                  </Field>
+
+                  <Field label="GSTR-2B">
+                    <Dropzone 
+                      label="Drop JSON/Excel/CSV file here"
+                      accept=".json,.xlsx,.csv,.xls"
+                      file={gstr2bFile}
+                      onFile={setGstr2bFile}
+                    />
+                    {gstr2bFile && <div className="mt-2 text-xs text-neutral-600 bg-neutral-50 p-2 rounded border border-neutral-200 flex items-center"><span className="material-symbols-outlined text-[16px] mr-1">check_circle</span> Tagged as GSTR-2B</div>}
+                  </Field>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t border-border justify-end">
                 <Button 
                   type="button" 
                   variant="ghost" 
@@ -142,13 +147,12 @@ export default function NewRun() {
                 <Button 
                   type="submit" 
                   variant="primary" 
-                  className="flex-1"
                   disabled={running}
                 >
                   {running ? (
                     <>
                       <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
-                      Running reconciliation...
+                      Starting...
                     </>
                   ) : 'Start reconciliation'}
                 </Button>
@@ -157,42 +161,6 @@ export default function NewRun() {
           </CardBody>
         </Card>
       </div>
-
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setModalOpen(false)}
-        title="Upload File"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setModalOpen(false)} disabled={uploading}>Cancel</Button>
-            <Button variant="primary" onClick={handleUpload} disabled={uploading || !fileObj}>Upload</Button>
-          </>
-        }
-      >
-        <form id="upload-form" onSubmit={handleUpload} className="space-y-6">
-          <Field label="File Kind">
-            <Select value={kind} onChange={(e) => setKind(e.target.value)} required>
-              <option value="purchase_register">Purchase Register (Excel/CSV)</option>
-              <option value="gstr_2b">GSTR-2B (JSON/Excel/CSV)</option>
-            </Select>
-          </Field>
-
-          {/* Note: Financial Year and Tax Period use the values from the main New Run form */}
-          <div className="bg-secondary p-3 rounded-md text-sm text-muted-foreground flex gap-2">
-             <span className="material-symbols-outlined text-[18px]">info</span>
-             <p>This file will be uploaded for <strong>{formData.financial_year}</strong> {formData.tax_period ? `(${formData.tax_period})` : ''}.</p>
-          </div>
-
-          <Field label="File">
-            <Dropzone 
-              label={`Drop your ${kind === 'purchase_register' ? 'Excel/CSV' : 'JSON/Excel/CSV'} file here`}
-              accept={kind === 'purchase_register' ? '.xlsx,.csv,.xls' : '.json,.xlsx,.csv,.xls'}
-              file={fileObj}
-              onFile={setFileObj}
-            />
-          </Field>
-        </form>
-      </Modal>
     </div>
   );
 }

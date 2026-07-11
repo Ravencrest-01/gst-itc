@@ -9,9 +9,7 @@ export function upload(clientId, fileObj, kind, financialYear, taxPeriod) {
   formData.append('file', fileObj);
   formData.append('kind', kind);
   formData.append('financial_year', financialYear);
-  if (taxPeriod) {
-    formData.append('tax_period', taxPeriod);
-  }
+  formData.append('tax_period', taxPeriod || '');
 
   return client.post(`/clients/${clientId}/files`, formData);
 }

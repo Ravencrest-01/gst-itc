@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useActiveClient } from '../../context/ActiveClientContext';
 
 const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: 'home' },
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const { workspaceType } = useAuth();
+  const { activeId } = useActiveClient();
 
   return (
     <aside className="w-64 bg-primary text-white flex flex-col h-full shrink-0">
@@ -25,11 +27,17 @@ export function Sidebar() {
         {NAV_ITEMS.map((item) => {
           if (item.firmOnly && workspaceType === 'solo') return null;
           
-          // Using a wrapper around NavLink to support active states effectively
+          let targetPath = item.path;
+          if (activeId) {
+            if (item.path === '/files') targetPath = `/clients/${activeId}/files`;
+            if (item.path === '/runs') targetPath = `/clients/${activeId}/runs`;
+            if (item.path === '/review') targetPath = `/clients/${activeId}/review`;
+          }
+
           return (
             <NavLink
               key={item.path}
-              to={item.path}
+              to={targetPath}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 rounded-radius transition-colors ${
                   isActive

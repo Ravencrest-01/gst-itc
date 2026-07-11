@@ -86,6 +86,19 @@ def list_recent_runs(
         client = db.query(Client).filter(Client.id == r.client_id).first()
         client_name = client.legal_name if client else "Unknown Client"
         
+        pr_total_rows = db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == r.id).count()
+        po_total_rows = db.query(PortalInvoice).filter(PortalInvoice.run_id == r.id).count()
+        matched = db.query(MatchResult).filter(MatchResult.run_id == r.id, MatchResult.bucket == Bucket.matched).count()
+        
+        match_rate = 0.0
+        if pr_total_rows > 0:
+            match_rate = round((matched / pr_total_rows) * 100, 1)
+            
+        itc_at_risk = 0.0
+        for m in db.query(MatchResult).filter(MatchResult.run_id == r.id).all():
+            if m.bucket in [Bucket.missing_in_portal, Bucket.mismatched]:
+                itc_at_risk += abs(m.tax_diff or 0.0)
+        
         items.append({
             "id": r.id,
             "client_id": r.client_id,
@@ -93,9 +106,9 @@ def list_recent_runs(
             "financial_year": r.financial_year,
             "tax_period": r.tax_period,
             "status": r.status,
-            "invoices": 0,
-            "matched_percentage": 0.0,
-            "itc_at_risk": 0.0,
+            "invoices": pr_total_rows + po_total_rows,
+            "matched_percentage": match_rate,
+            "itc_at_risk": itc_at_risk,
             "created_on": r.created_at
         })
     return RunListResponse(items=items, total=len(items))
@@ -119,6 +132,19 @@ def list_runs(
         client = db.query(Client).filter(Client.id == r.client_id).first()
         client_name = client.legal_name if client else "Unknown Client"
         
+        pr_total_rows = db.query(PurchaseInvoice).filter(PurchaseInvoice.run_id == r.id).count()
+        po_total_rows = db.query(PortalInvoice).filter(PortalInvoice.run_id == r.id).count()
+        matched = db.query(MatchResult).filter(MatchResult.run_id == r.id, MatchResult.bucket == Bucket.matched).count()
+        
+        match_rate = 0.0
+        if pr_total_rows > 0:
+            match_rate = round((matched / pr_total_rows) * 100, 1)
+            
+        itc_at_risk = 0.0
+        for m in db.query(MatchResult).filter(MatchResult.run_id == r.id).all():
+            if m.bucket in [Bucket.missing_in_portal, Bucket.mismatched]:
+                itc_at_risk += abs(m.tax_diff or 0.0)
+                
         items.append(RunResponse(
             id=r.id,
             client_id=r.client_id,
@@ -126,9 +152,9 @@ def list_runs(
             financial_year=r.financial_year,
             tax_period=r.tax_period,
             status=r.status,
-            invoices=0, # Would aggregate from purchase/portal invoices
-            matched_percentage=0.0,
-            itc_at_risk=0.0,
+            invoices=pr_total_rows + po_total_rows,
+            matched_percentage=match_rate,
+            itc_at_risk=itc_at_risk,
             created_on=r.created_at
         ))
     return RunListResponse(items=items, total=len(items))
@@ -209,36 +235,56 @@ def get_run_matches(
     if bucket:
         query = query.filter(MatchResult.bucket == bucket)
         
-    total = query.count()
-    matches = query.offset((page - 1) * page_size).limit(page_size).all()
+    # We must join to PR/PO to filter by q if necessary
+    # Or fetch all and filter in Python for simplicity in MVP
+    matches_all = query.all()
+    filtered_matches = []
+    
+    for m in matches_all:
+        pr_inv = None
+        po_inv = None
+        if m.purchase_invoice_id:
+            pr_inv = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == m.purchase_invoice_id).first()
+        if m.portal_invoice_id:
+            po_inv = db.query(PortalInvoice).filter(PortalInvoice.id == m.portal_invoice_id).first()
+            
+        pr_num = pr_inv.invoice_number if pr_inv else ""
+        po_num = po_inv.invoice_number if po_inv else ""
+        pr_gstin = pr_inv.supplier_gstin if pr_inv else ""
+        po_gstin = po_inv.supplier_gstin if po_inv else ""
+        
+        # Filter by q (search)
+        if q:
+            q_lower = q.lower()
+            if q_lower not in pr_num.lower() and q_lower not in po_num.lower() and q_lower not in pr_gstin.lower() and q_lower not in po_gstin.lower():
+                continue
+                
+        filtered_matches.append((m, pr_inv, po_inv))
+        
+    total = len(filtered_matches)
+    start_idx = (page - 1) * page_size
+    paged_matches = filtered_matches[start_idx:start_idx + page_size]
     
     items = []
-    for m in matches:
-        inv = None
-        source = None
-        if m.purchase_invoice_id:
-            inv = db.query(PurchaseInvoice).filter(PurchaseInvoice.id == m.purchase_invoice_id).first()
-            source = "PR"
-        elif m.portal_invoice_id:
-            inv = db.query(PortalInvoice).filter(PortalInvoice.id == m.portal_invoice_id).first()
-            source = "GSTR-2B"
+    for m, pr_inv, po_inv in paged_matches:
+        items.append(MatchRowResponse(
+            id=m.id,
+            bucket=m.bucket,
+            match_pass=m.match_pass,
+            confidence=m.confidence,
+            difference=m.tax_diff,
             
-        if inv:
-            items.append(MatchRowResponse(
-                id=m.id,
-                bucket=m.bucket,
-                match_pass=m.match_pass,
-                confidence=m.confidence,
-                tax_diff=m.tax_diff,
-                supplier_gstin=inv.supplier_gstin,
-                supplier_name=inv.supplier_name,
-                invoice_number=inv.invoice_number,
-                invoice_date=inv.invoice_date,
-                taxable_value=inv.taxable_value,
-                total_tax=inv.total_tax,
-                source=source,
-                review_status=m.review_status
-            ))
+            pr_vendor_gstin=pr_inv.supplier_gstin if pr_inv else None,
+            gstr2b_vendor_gstin=po_inv.supplier_gstin if po_inv else None,
+            pr_invoice_number=pr_inv.invoice_number if pr_inv else None,
+            gstr2b_invoice_number=po_inv.invoice_number if po_inv else None,
+            pr_invoice_date=pr_inv.invoice_date if pr_inv else None,
+            gstr2b_invoice_date=po_inv.invoice_date if po_inv else None,
+            pr_tax_value=pr_inv.total_tax if pr_inv else None,
+            gstr2b_tax_value=po_inv.total_tax if po_inv else None,
+            
+            review_status=m.review_status
+        ))
     
     return MatchRowListResponse(items=items, total=total, page=page, page_size=page_size)
 

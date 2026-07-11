@@ -57,14 +57,17 @@ class MatchRowResponse(BaseModel):
     bucket: Bucket
     match_pass: Optional[MatchPass] = None
     confidence: Optional[float] = None
-    tax_diff: Optional[float] = None
-    supplier_gstin: str
-    supplier_name: str
-    invoice_number: str
-    invoice_date: str
-    taxable_value: float
-    total_tax: float
-    source: Optional[str] = None
+    difference: Optional[float] = None
+    
+    pr_vendor_gstin: Optional[str] = None
+    gstr2b_vendor_gstin: Optional[str] = None
+    pr_invoice_number: Optional[str] = None
+    gstr2b_invoice_number: Optional[str] = None
+    pr_invoice_date: Optional[str] = None
+    gstr2b_invoice_date: Optional[str] = None
+    pr_tax_value: Optional[float] = None
+    gstr2b_tax_value: Optional[float] = None
+    
     review_status: ReviewStatus
 
 class MatchRowListResponse(BaseModel):

@@ -390,6 +390,10 @@ export const vendorCommunications = pgTable(
   },
   (t) => [
     index('idx_comms_vendor').on(t.organizationId, t.vendorId, t.createdAt),
+    // One message per vendor, run, channel and escalation stage: re-running dispatch is safe.
+    uniqueIndex('unq_comms_run_vendor_stage')
+      .on(t.reconciliationRunId, t.vendorId, t.channel, t.escalationStage)
+      .where(sql`${t.reconciliationRunId} IS NOT NULL`),
     uniqueIndex('unq_comms_external_id')
       .on(t.channel, t.externalMessageId)
       .where(sql`${t.externalMessageId} IS NOT NULL`),

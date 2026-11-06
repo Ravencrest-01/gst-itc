@@ -1,12 +1,11 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 import type { Readable } from 'node:stream';
+import type { Db } from '../../db/client';
 import * as schema from '../../db/schema';
 import { ingestFile, IngestionError, type IngestOptions } from './pipeline';
 import type { ColumnMapping, IngestionSink, IngestionSource, IngestionSummary, NormalizedRow } from './types';
 
-/** Works with both the Neon HTTP driver (runtime) and PGlite (tests). */
-export type Db = PgDatabase<PgQueryResultHKT, typeof schema>;
+export type { Db };
 
 export interface DbSinkOptions {
   organizationId: string;

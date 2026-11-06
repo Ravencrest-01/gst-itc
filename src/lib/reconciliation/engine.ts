@@ -398,7 +398,7 @@ export function reconcile(
   return { results, summary: summarize(results, prs.length, b2bs.length, [...invalid]) };
 }
 
-function summarize(
+export function summarize(
   results: MatchResult[],
   totalPr: number,
   total2b: number,

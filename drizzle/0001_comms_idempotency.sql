@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "unq_comms_run_vendor_stage" ON "vendor_communications" USING btree ("reconciliation_run_id","vendor_id","channel","escalation_stage") WHERE "vendor_communications"."reconciliation_run_id" IS NOT NULL;

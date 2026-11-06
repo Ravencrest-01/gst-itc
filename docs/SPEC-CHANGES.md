@@ -41,6 +41,15 @@ The vendor tier is the higher of the tier above and an amount-based tier: â‰¥ â‚
 - **ExcelJS streaming bug:** the reader crashes on workbooks whose sheets come before `workbook.xml` (the order ExcelJS itself writes). We work around it, but sheet names are lost for those files. GSTR-2B amendment sheets (B2BA/CDNRA) are therefore recognised by their duplicate "Invoice number" columns rather than by name, and skipped with a warning. Amendments should be ingested from the 2B JSON.
 - **Database tests:** run against PGlite (in-process Postgres 17) using the real migration, so no Neon instance is needed.
 
+## Mock GSP and email dunning (Day 6)
+
+- **No external APIs before MVP.** Resend is replaced by SMTP to Mailpit, behind an `EmailTransport` interface, and the GSP is a mock behind `GspProvider`. Moving to Resend or a real GSP later means adding one implementation of each interface.
+- **CSV instead of PDF.** The discrepancy ledger is attached as a CSV, not a PDF. Vendors can open it in Excel and correct their filings from it; a PDF can be added later.
+- **Who gets dunned.** Only issues the vendor can fix by filing or amending GSTR-1 trigger emails. ITC that 2B marks ineligible, or that has already lapsed, is left out.
+- **Cadence follows the vendor, not the run.** The spec's T+0/T+5/T+10 is measured from the first reminder within a 30-day window, so running reconciliation again does not send the first reminder again.
+- **Payment hold.** The T+10 "finance hold" is recorded on the communication (`payload.paymentHold`), and the buyer's finance managers are copied. The payment-batch integration itself is outside the MVP.
+- **Local database.** `DATABASE_URL` is optional. Without it, the app uses an embedded Postgres (PGlite) in `./.data/pglite`, so the full pipeline runs with no accounts.
+
 ## Still open (roadmap items, not done yet)
 
 - GSP access for live GSTR-2B needs a licensed GSP/ASP agreement, so it stays mocked for now.

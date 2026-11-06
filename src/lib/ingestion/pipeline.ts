@@ -236,7 +236,8 @@ export async function ingestFile(
       summary.warnings.push({ row: 0, sheet: n.sheet || undefined, message: `Sheet skipped: ${n.reason}` });
     }
   }
-  if (summary.rowCount === 0 && summary.errorCount === 0) {
+  // A valid GSTR-2B JSON with no documents is a legitimate nil statement.
+  if (format !== 'json' && summary.rowCount === 0 && summary.errorCount === 0) {
     throw new IngestionError('No invoice rows found. Check that the file has a header row.', summary);
   }
   return summary;

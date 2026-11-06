@@ -35,6 +35,12 @@ These are deliberate departures from *GST ITC Recovery Platform — Specificatio
 
 The vendor tier is the higher of the tier above and an amount-based tier: ≥ ₹25k MEDIUM, ≥ ₹1L HIGH, ≥ ₹10L CRITICAL. Dunning starts when a vendor has at least ₹5,000 of recoverable ITC at risk.
 
+## Ingestion (Day 2)
+
+- **CSV parser:** papaparse, not `csv-parser`. Its stream mode becomes quadratic when the file arrives as one large chunk (a 3 MB chunk took about 45 s), so input is re-cut into 64 KB chunks first.
+- **ExcelJS streaming bug:** the reader crashes on workbooks whose sheets come before `workbook.xml` (the order ExcelJS itself writes). We work around it, but sheet names are lost for those files. GSTR-2B amendment sheets (B2BA/CDNRA) are therefore recognised by their duplicate "Invoice number" columns rather than by name, and skipped with a warning. Amendments should be ingested from the 2B JSON.
+- **Database tests:** run against PGlite (in-process Postgres 17) using the real migration, so no Neon instance is needed.
+
 ## Still open (roadmap items, not done yet)
 
 - GSP access for live GSTR-2B needs a licensed GSP/ASP agreement, so it stays mocked for now.

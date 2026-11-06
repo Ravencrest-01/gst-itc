@@ -38,7 +38,7 @@ The vendor tier is the higher of the tier above and an amount-based tier: â‰¥ â‚
 ## Ingestion (Day 2)
 
 - **CSV parser:** papaparse, not `csv-parser`. Its stream mode becomes quadratic when the file arrives as one large chunk (a 3 MB chunk took about 45 s), so input is re-cut into 64 KB chunks first.
-- **ExcelJS streaming bug:** the reader crashes on workbooks whose sheets come before `workbook.xml` (the order ExcelJS itself writes). We work around it, but sheet names are lost for those files. GSTR-2B amendment sheets (B2BA/CDNRA) are therefore recognised by their duplicate "Invoice number" columns rather than by name, and skipped with a warning. Amendments should be ingested from the 2B JSON.
+- **Excel files are loaded whole, not streamed.** ExcelJS's streaming reader is unreliable on workbooks that list worksheets before `workbook.xml` (the layout ExcelJS itself and some ERP exporters write). It crashed or silently returned only the first sheet in 34 of 40 test parses. Excel files are now loaded whole, up to 20 MB, which keeps sheet names and is deterministic. Larger ledgers should be uploaded as CSV, which still streams. GSTR-2B amendment sheets are skipped by name, and also when two columns match the invoice number.
 - **Database tests:** run against PGlite (in-process Postgres 17) using the real migration, so no Neon instance is needed.
 
 ## Mock GSP and email dunning (Day 6)
@@ -49,6 +49,14 @@ The vendor tier is the higher of the tier above and an amount-based tier: â‰¥ â‚
 - **Cadence follows the vendor, not the run.** The spec's T+0/T+5/T+10 is measured from the first reminder within a 30-day window, so running reconciliation again does not send the first reminder again.
 - **Payment hold.** The T+10 "finance hold" is recorded on the communication (`payload.paymentHold`), and the buyer's finance managers are copied. The payment-batch integration itself is outside the MVP.
 - **Local database.** `DATABASE_URL` is optional. Without it, the app uses an embedded Postgres (PGlite) in `./.data/pglite`, so the full pipeline runs with no accounts.
+
+## WhatsApp (Day 7)
+
+- **Template variables are numbered per component.** WhatsApp numbers them separately in the header, body and button, so the spec's 7 variables become header {{1}} (buyer), body {{1}}â€“{{5}} (contact, count, amount, FY, deadline) and button URL suffix {{1}} (statement token).
+- **Static footer.** The spec's footer "GST Compliance Team | {{1}}" is not allowed, because footers cannot contain variables. It is now static: "GST Compliance Team".
+- **Three templates, one per escalation stage.** The spec had a single template; separate templates let the wording escalate the same way the emails do.
+- **No provider before MVP.** Messages are mirrored into Mailpit. The raw statement token is kept out of the stored audit copy of each request.
+- **Reply matching is not yet per tenant.** Vendor replies are matched by message id, or else by the latest message sent to that number. A per-organization WhatsApp number mapping comes with the real provider.
 
 ## Still open (roadmap items, not done yet)
 

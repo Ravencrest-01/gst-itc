@@ -9,6 +9,13 @@ import {
   type DunningStage,
 } from '../notifications/email/templates';
 import { createStatementToken, statementUrl } from '../notifications/tokens';
+import {
+  buildMetaTemplateMessage,
+  normalizeIndianMobile,
+  renderWhatsAppText,
+  WHATSAPP_TEMPLATES,
+} from '../notifications/whatsapp/template';
+import type { WhatsAppTransport } from '../notifications/whatsapp/transport';
 import type { MatchStatus } from '../reconciliation/types';
 
 /** T+0 friendly reminder, T+5 detailed reminder, T+10 final notice with payment hold. */
@@ -39,6 +46,7 @@ export function describeError(err: unknown): string {
   }
   return String(err);
 }
+
 /** Messages older than this no longer count towards a vendor's escalation. */
 export const CAMPAIGN_WINDOW_DAYS = 30;
 type CommStatus = (typeof schema.commStatusEnum.enumValues)[number];
@@ -66,7 +74,7 @@ export function nextDueStage(history: CommHistory[], now: Date): DunningStage | 
 
 export interface VendorNotice {
   vendorId: string;
-  vendor: { legalName: string; gstin: string; contactName: string | null; contactEmail: string | null };
+  vendor: { legalName: string; gstin: string; contactName: string | null; contactEmail: string | null; contactPhone: string | null };
   items: (DunningItem & { matchResultId: string; deadline: string })[];
   totalAtRisk: number;
   deadline: string;
@@ -92,6 +100,7 @@ export async function loadVendorNotices(
       vendorGstin: schema.vendors.gstin,
       contactName: schema.vendors.contactName,
       contactEmail: schema.vendors.contactEmail,
+      contactPhone: schema.vendors.contactPhone,
       prNumber: pr.rawInvoiceNumber,
       prDate: pr.invoiceDate,
       prTax: pr.totalTax,
@@ -121,7 +130,7 @@ export async function loadVendorNotices(
     if (!notice) {
       notice = {
         vendorId: r.vendorId,
-        vendor: { legalName: r.legalName, gstin: r.vendorGstin, contactName: r.contactName, contactEmail: r.contactEmail },
+        vendor: { legalName: r.legalName, gstin: r.vendorGstin, contactName: r.contactName, contactEmail: r.contactEmail, contactPhone: r.contactPhone },
         items: [],
         totalAtRisk: 0,
         deadline: r.deadline,
@@ -147,14 +156,19 @@ export async function loadVendorNotices(
     .sort((a, b) => b.totalAtRisk - a.totalAtRisk);
 }
 
+export type Channel = 'EMAIL' | 'WHATSAPP';
+
 export interface DispatchOptions {
   organizationId: string;
   runId: string;
-  transport: EmailTransport;
   /** Public app URL used in statement links. */
   appBaseUrl: string;
-  from: string;
+  /** Email channel; omit to disable it. */
+  transport?: EmailTransport;
+  from?: string;
   replyTo?: string;
+  /** WhatsApp channel; omit to disable it. */
+  whatsapp?: WhatsAppTransport;
   threshold?: number;
   now?: Date;
   /** Render and report without sending or writing anything. */
@@ -162,17 +176,29 @@ export interface DispatchOptions {
 }
 
 export interface DispatchReport {
-  sent: { vendorGstin: string; stage: DunningStage; to: string; communicationId: string; totalAtRisk: number }[];
-  skipped: { vendorGstin: string; reason: string }[];
-  failed: { vendorGstin: string; stage: DunningStage; error: string }[];
-  previews: { vendorGstin: string; stage: DunningStage; subject: string }[];
+  sent: { channel: Channel; vendorGstin: string; stage: DunningStage; to: string; communicationId: string; totalAtRisk: number }[];
+  skipped: { channel: Channel; vendorGstin: string; reason: string }[];
+  failed: { channel: Channel; vendorGstin: string; stage: DunningStage; error: string }[];
+  previews: { channel: Channel; vendorGstin: string; stage: DunningStage; subject: string }[];
 }
 
-/** Sends whichever escalation stage is due to every vendor with enough ITC at risk. */
-export async function dispatchDunningEmails(db: Db, options: DispatchOptions): Promise<DispatchReport> {
+/**
+ * Sends whichever escalation stage is due, on every configured channel, to each vendor
+ * with enough recoverable ITC at risk. Each channel keeps its own T+0/T+5/T+10 cadence;
+ * a vendor reply on any channel stops all of them.
+ */
+export async function dispatchDunning(db: Db, options: DispatchOptions): Promise<DispatchReport> {
   const now = options.now ?? new Date();
   const today = now.toISOString().slice(0, 10);
   const report: DispatchReport = { sent: [], skipped: [], failed: [], previews: [] };
+
+  const channels: Channel[] = [];
+  if (options.transport) {
+    if (!options.from) throw new Error('"from" is required for the email channel');
+    channels.push('EMAIL');
+  }
+  if (options.whatsapp) channels.push('WHATSAPP');
+  if (!channels.length) throw new Error('No dunning channel configured (email transport or WhatsApp transport)');
 
   const [run] = await db
     .select()
@@ -197,139 +223,191 @@ export async function dispatchDunningEmails(db: Db, options: DispatchOptions): P
 
   const notices = await loadVendorNotices(db, { organizationId: options.organizationId, runId: options.runId, threshold: options.threshold });
   const comms = schema.vendorCommunications;
+  const windowStart = new Date(now.getTime() - CAMPAIGN_WINDOW_DAYS * DAY_MS);
 
   for (const notice of notices) {
     const gstin = notice.vendor.gstin;
-    const to = notice.vendor.contactEmail;
-    if (!to) {
-      report.skipped.push({ vendorGstin: gstin, reason: 'no contact email' });
-      continue;
-    }
-
-    // Escalation follows the vendor across reconciliation runs, so re-running reconciliation
-    // does not restart the sequence. A new cycle starts once the window has passed.
-    const windowStart = new Date(now.getTime() - CAMPAIGN_WINDOW_DAYS * DAY_MS);
-    const history = (
-      await db
-        .select({ id: comms.id, runId: comms.reconciliationRunId, stage: comms.escalationStage, status: comms.status, sentAt: comms.sentAt, createdAt: comms.createdAt })
-        .from(comms)
-        .where(and(eq(comms.organizationId, options.organizationId), eq(comms.vendorId, notice.vendorId), eq(comms.channel, 'EMAIL')))
-    ).filter((h) => (h.sentAt ?? h.createdAt) >= windowStart || (h.runId === options.runId && !h.sentAt));
-    const stage = nextDueStage(history, now);
-    if (stage === null) {
-      const done = history.some((h) => h.status === 'RESPONDED') ? 'vendor responded' : history.some((h) => h.stage === 2 && h.sentAt) ? 'escalation complete' : 'next stage not due yet';
-      report.skipped.push({ vendorGstin: gstin, reason: done });
-      continue;
-    }
-    const step = CADENCE[stage];
     const daysToDeadline = toEpochDay(notice.deadline) - toEpochDay(today);
 
-    const renderFor = (url: string) =>
-      renderDunningEmail({
-        stage,
-        buyer: { legalName: org.legalName, gstin: org.primaryGstin },
-        vendor: notice.vendor,
-        financialYear: run.financialYear,
-        deadline: notice.deadline,
-        daysToDeadline,
-        items: notice.items,
-        totalAtRisk: notice.totalAtRisk,
-        statementUrl: url,
-      });
-
-    if (options.dryRun) {
-      const preview = renderFor(statementUrl(options.appBaseUrl, 'preview'));
-      report.previews.push({ vendorGstin: gstin, stage, subject: preview.subject });
-      continue;
-    }
-
-    // Claim the (run, vendor, channel, stage) slot. A FAILED attempt in this run is retried.
-    const existing = history.find((h) => h.stage === stage && h.runId === options.runId);
-    if (existing && existing.status !== 'FAILED') {
-      report.skipped.push({ vendorGstin: gstin, reason: `stage ${stage} already ${existing.status.toLowerCase()}` });
-      continue;
-    }
-    let communicationId: string;
-    if (existing) {
-      communicationId = existing.id;
-      await db.update(comms).set({ status: 'QUEUED', failureReason: null, recipientAddress: to }).where(eq(comms.id, existing.id));
-    } else {
-      const [claimed] = await db
-        .insert(comms)
-        .values({
-          organizationId: options.organizationId,
-          vendorId: notice.vendorId,
-          reconciliationRunId: options.runId,
-          channel: 'EMAIL',
-          escalationStage: stage,
-          recipientAddress: to,
-          templateId: step.templateId,
-          payload: {},
+    // Escalation follows the vendor across reconciliation runs, so re-running
+    // reconciliation does not restart it. A new cycle starts once the window has passed.
+    const allHistory = (
+      await db
+        .select({
+          id: comms.id,
+          channel: comms.channel,
+          runId: comms.reconciliationRunId,
+          stage: comms.escalationStage,
+          status: comms.status,
+          sentAt: comms.sentAt,
+          createdAt: comms.createdAt,
         })
-        .onConflictDoNothing()
-        .returning({ id: comms.id });
-      if (!claimed) {
-        report.skipped.push({ vendorGstin: gstin, reason: `stage ${stage} claimed by another dispatcher` });
-        continue;
-      }
-      communicationId = claimed.id;
-    }
+        .from(comms)
+        .where(and(eq(comms.organizationId, options.organizationId), eq(comms.vendorId, notice.vendorId)))
+    ).filter((h) => (h.sentAt ?? h.createdAt) >= windowStart || (h.runId === options.runId && !h.sentAt));
+    const responded = allHistory.some((h) => h.status === 'RESPONDED');
 
-    try {
-      const expiresAt = new Date(Math.max(toEpochDay(notice.deadline) * DAY_MS + 30 * DAY_MS, now.getTime() + 60 * DAY_MS));
-      const token = await createStatementToken(db, {
+    // One statement link per vendor per dispatch, shared by its channels.
+    let token: { token: string; id: string } | undefined;
+    const getToken = async () =>
+      (token ??= await createStatementToken(db, {
         organizationId: options.organizationId,
         vendorId: notice.vendorId,
         reconciliationRunId: options.runId,
-        expiresAt,
-      });
-      const email = renderFor(statementUrl(options.appBaseUrl, token.token));
-      const payload = {
-        subject: email.subject,
-        stage,
-        itemCount: notice.items.length,
-        totalAtRisk: notice.totalAtRisk,
-        deadline: notice.deadline,
-        statementTokenId: token.id,
-        matchResultIds: notice.items.map((i) => i.matchResultId),
-        paymentHold: stage === 2,
-        transport: options.transport.name,
-      };
-      const { messageId } = await options.transport.send({
-        from: options.from,
-        to,
-        cc: stage === 2 ? financeCc : undefined,
-        replyTo: options.replyTo,
-        subject: email.subject,
-        html: email.html,
-        text: email.text,
-        attachments: [{ filename: `ITC-discrepancies-${gstin}-${run.financialYear}.csv`, content: email.csv, contentType: 'text/csv' }],
-        headers: { 'X-GST-ITC-Communication-Id': communicationId, 'X-GST-ITC-Stage': String(stage) },
-      });
-      // The email has left: from here on the row must end up SENT, never FAILED, or a
-      // retry would email the vendor twice.
-      try {
-        await db
-          .update(comms)
-          .set({ status: 'SENT', sentAt: now, externalMessageId: messageId, payload })
-          .where(eq(comms.id, communicationId));
-      } catch (recordErr) {
-        await db
-          .update(comms)
-          .set({
-            status: 'SENT',
-            sentAt: now,
-            payload,
-            failureReason: `Sent, but recording the message id failed: ${String(recordErr).slice(0, 500)}`,
-          })
-          .where(eq(comms.id, communicationId));
+        expiresAt: new Date(Math.max(toEpochDay(notice.deadline) * DAY_MS + 30 * DAY_MS, now.getTime() + 60 * DAY_MS)),
+      }));
+
+    for (const channel of channels) {
+      const to = channel === 'EMAIL' ? notice.vendor.contactEmail : normalizeIndianMobile(notice.vendor.contactPhone);
+      if (!to) {
+        const reason =
+          channel === 'EMAIL'
+            ? 'no contact email'
+            : notice.vendor.contactPhone
+              ? `invalid WhatsApp number "${notice.vendor.contactPhone}"`
+              : 'no WhatsApp number';
+        report.skipped.push({ channel, vendorGstin: gstin, reason });
+        continue;
       }
-      report.sent.push({ vendorGstin: gstin, stage, to, communicationId, totalAtRisk: notice.totalAtRisk });
-    } catch (err) {
-      const error = describeError(err);
-      await db.update(comms).set({ status: 'FAILED', failureReason: error.slice(0, 1_000) }).where(eq(comms.id, communicationId));
-      report.failed.push({ vendorGstin: gstin, stage, error });
+      if (responded) {
+        report.skipped.push({ channel, vendorGstin: gstin, reason: 'vendor responded' });
+        continue;
+      }
+
+      const history = allHistory.filter((h) => h.channel === channel);
+      const stage = nextDueStage(history, now);
+      if (stage === null) {
+        const reason = history.some((h) => h.stage === 2 && h.sentAt) ? 'escalation complete' : 'next stage not due yet';
+        report.skipped.push({ channel, vendorGstin: gstin, reason });
+        continue;
+      }
+
+      const waInput = (statementToken: string) => ({
+        stage,
+        buyerLegalName: org.legalName,
+        vendorContactName: notice.vendor.contactName || notice.vendor.legalName,
+        invoiceCount: notice.items.length,
+        totalAtRisk: notice.totalAtRisk,
+        financialYear: run.financialYear,
+        deadline: notice.deadline,
+        statementToken,
+      });
+      const renderEmail = (url: string) =>
+        renderDunningEmail({
+          stage,
+          buyer: { legalName: org.legalName, gstin: org.primaryGstin },
+          vendor: notice.vendor,
+          financialYear: run.financialYear,
+          deadline: notice.deadline,
+          daysToDeadline,
+          items: notice.items,
+          totalAtRisk: notice.totalAtRisk,
+          statementUrl: url,
+        });
+
+      if (options.dryRun) {
+        const subject =
+          channel === 'EMAIL'
+            ? renderEmail(statementUrl(options.appBaseUrl, 'preview')).subject
+            : `WhatsApp template ${WHATSAPP_TEMPLATES[stage].name}`;
+        report.previews.push({ channel, vendorGstin: gstin, stage, subject });
+        continue;
+      }
+
+      // Claim the (run, vendor, channel, stage) slot. A FAILED attempt in this run is retried.
+      const existing = history.find((h) => h.stage === stage && h.runId === options.runId);
+      if (existing && existing.status !== 'FAILED') {
+        report.skipped.push({ channel, vendorGstin: gstin, reason: `stage ${stage} already ${existing.status.toLowerCase()}` });
+        continue;
+      }
+      const templateId = channel === 'EMAIL' ? CADENCE[stage].templateId : WHATSAPP_TEMPLATES[stage].name;
+      let communicationId: string;
+      if (existing) {
+        communicationId = existing.id;
+        await db.update(comms).set({ status: 'QUEUED', failureReason: null, recipientAddress: to }).where(eq(comms.id, existing.id));
+      } else {
+        const [claimed] = await db
+          .insert(comms)
+          .values({
+            organizationId: options.organizationId,
+            vendorId: notice.vendorId,
+            reconciliationRunId: options.runId,
+            channel,
+            escalationStage: stage,
+            recipientAddress: to,
+            templateId,
+            payload: {},
+          })
+          .onConflictDoNothing()
+          .returning({ id: comms.id });
+        if (!claimed) {
+          report.skipped.push({ channel, vendorGstin: gstin, reason: `stage ${stage} claimed by another dispatcher` });
+          continue;
+        }
+        communicationId = claimed.id;
+      }
+
+      try {
+        const { token: rawToken, id: tokenId } = await getToken();
+        const common = {
+          stage,
+          itemCount: notice.items.length,
+          totalAtRisk: notice.totalAtRisk,
+          deadline: notice.deadline,
+          statementTokenId: tokenId,
+          matchResultIds: notice.items.map((i) => i.matchResultId),
+          paymentHold: stage === 2,
+        };
+        let messageId: string;
+        let payload: Record<string, unknown>;
+        if (channel === 'EMAIL') {
+          const email = renderEmail(statementUrl(options.appBaseUrl, rawToken));
+          payload = { ...common, subject: email.subject, transport: options.transport!.name };
+          ({ messageId } = await options.transport!.send({
+            from: options.from!,
+            to,
+            cc: stage === 2 ? financeCc : undefined,
+            replyTo: options.replyTo,
+            subject: email.subject,
+            html: email.html,
+            text: email.text,
+            attachments: [{ filename: `ITC-discrepancies-${gstin}-${run.financialYear}.csv`, content: email.csv, contentType: 'text/csv' }],
+            headers: { 'X-GST-ITC-Communication-Id': communicationId, 'X-GST-ITC-Stage': String(stage) },
+          }));
+        } else {
+          const input = waInput(rawToken);
+          const request = buildMetaTemplateMessage(to, input);
+          // The raw token is a secret: keep the request in the audit trail without it.
+          const auditRequest = buildMetaTemplateMessage(to, { ...input, statementToken: '<token>' });
+          payload = { ...common, template: request.template.name, request: auditRequest, transport: options.whatsapp!.name };
+          ({ messageId } = await options.whatsapp!.send({
+            to,
+            request,
+            previewText: renderWhatsAppText(input, options.appBaseUrl),
+            communicationId,
+          }));
+        }
+        // The message has left: from here on the row must end up SENT, never FAILED, or a
+        // retry would contact the vendor twice.
+        try {
+          await db.update(comms).set({ status: 'SENT', sentAt: now, externalMessageId: messageId, payload }).where(eq(comms.id, communicationId));
+        } catch (recordErr) {
+          await db
+            .update(comms)
+            .set({ status: 'SENT', sentAt: now, payload, failureReason: `Sent, but recording the message id failed: ${String(recordErr).slice(0, 500)}` })
+            .where(eq(comms.id, communicationId));
+        }
+        report.sent.push({ channel, vendorGstin: gstin, stage, to, communicationId, totalAtRisk: notice.totalAtRisk });
+      } catch (err) {
+        const error = describeError(err);
+        await db.update(comms).set({ status: 'FAILED', failureReason: error.slice(0, 1_000) }).where(eq(comms.id, communicationId));
+        report.failed.push({ channel, vendorGstin: gstin, stage, error });
+      }
     }
   }
   return report;
 }
+
+/** Email-and-WhatsApp dispatcher; the old name is kept for existing call sites. */
+export const dispatchDunningEmails = dispatchDunning;
+

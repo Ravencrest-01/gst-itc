@@ -61,39 +61,57 @@ export function csvSheet(input: Readable, name = ''): Sheet {
  */
 const SKIPPED_XLSX_SHEETS = /^(b2ba|b2b-?cdnra|ecoa|impga?|isda)$/i;
 
-export async function* xlsxSheets(
-  input: Readable,
-): AsyncGenerator<Sheet & { skippedReason?: string }> {
-  const reader = new ExcelJS.stream.xlsx.WorkbookReader(input, {
-    sharedStrings: 'cache',
-    hyperlinks: 'ignore',
-    styles: 'cache',
-    worksheets: 'emit',
-    entries: 'emit',
-  });
-  // ExcelJS crashes if a worksheet entry precedes xl/workbook.xml in the zip (the order
-  // ExcelJS itself writes). An empty model avoids the crash; such sheets lose their name
-  // and fall back to "Sheet<n>", and amendment sheets are then caught by their duplicate
-  // invoice-number columns (see autoMapColumns().ambiguous).
-  const r = reader as unknown as { model?: { sheets?: unknown[] }; properties?: { model?: object } };
-  r.model ??= { sheets: [] };
-  r.properties ??= { model: { date1904: false } };
-  for await (const ws of reader) {
-    const meta = ws as unknown as { name?: string; id?: string | number };
-    const name = meta.name ?? `Sheet${meta.id ?? ''}`;
+/**
+ * Largest workbook accepted. XLSX is loaded fully (see below); bigger ledgers should be
+ * exported as CSV, which streams with flat memory.
+ */
+export const XLSX_MAX_BYTES = 20 * 1024 * 1024;
+
+export class WorkbookTooLargeError extends Error {}
+
+/**
+ * Reads every worksheet of an .xlsx file.
+ *
+ * ExcelJS's streaming WorkbookReader is not used: on workbooks whose zip lists worksheets
+ * before xl/workbook.xml (the layout ExcelJS and some ERP exporters write) it crashes, or
+ * silently returns only the first sheet (measured: 34 of 40 parses lost sheets). Loading
+ * the workbook is reliable, keeps sheet names, and is bounded by XLSX_MAX_BYTES.
+ */
+export async function* xlsxSheets(input: Readable): AsyncGenerator<Sheet & { skippedReason?: string }> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of input) {
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
+    size += buf.length;
+    if (size > XLSX_MAX_BYTES) {
+      input.destroy();
+      throw new WorkbookTooLargeError(
+        `Workbook is larger than ${XLSX_MAX_BYTES / 1024 / 1024} MB; export it as CSV instead`,
+      );
+    }
+    chunks.push(buf);
+  }
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(Buffer.concat(chunks) as unknown as ArrayBuffer);
+  } catch (err) {
+    throw new Error(`Not a readable .xlsx workbook: ${(err as Error).message}`);
+  }
+
+  for (const ws of workbook.worksheets) {
+    const name = ws.name;
     if (SKIPPED_XLSX_SHEETS.test(name.trim())) {
-      // The stream must still be drained before the next sheet is emitted.
-      for await (const _ of ws) void _;
       yield { name, rows: (async function* () {})(), skippedReason: 'amendment sheet (use GSTR-2B JSON)' };
       continue;
     }
     async function* rows() {
-      for await (const row of ws) {
+      for (let r = 1; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
         const values = Array.isArray(row.values) ? row.values : Object.values(row.values ?? {});
         // ExcelJS rows are 1-based and sparse; index 0 is always empty.
         const cells: unknown[] = [];
         for (let i = 1; i < values.length; i++) cells.push(plainCellValue(values[i]));
-        yield Object.assign(cells, { rowNumber: row.number });
+        yield Object.assign(cells, { rowNumber: r });
       }
     }
     yield { name, rows: rows() };

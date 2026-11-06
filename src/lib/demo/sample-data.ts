@@ -23,19 +23,19 @@ export const DEMO_USERS = [
 
 /** Same state code as the buyer (27) means CGST+SGST; any other state means IGST. */
 export const DEMO_VENDORS = [
-  { state: '27', pan: 'AAACB9812R', legalName: 'Acme Logistics Pvt Ltd', contactName: 'Rahul Verma', prefix: 'INV/' },
-  { state: '07', pan: 'AAACC4455K', legalName: 'Cyberdyne Systems LLP', contactName: 'Meera Iyer', prefix: 'CD-' },
-  { state: '33', pan: 'AAACG1122R', legalName: 'Orion Traders', contactName: 'S. Karthik', prefix: 'OR-' },
-  { state: '27', pan: 'AAFCP7788M', legalName: 'Pune Packaging Co', contactName: 'Neha Kulkarni', prefix: 'PPC/' },
-  { state: '24', pan: 'AABCS3344L', legalName: 'Surat Textiles Ltd', contactName: 'Hardik Patel', prefix: 'ST' },
-  { state: '29', pan: 'AAGCB5566P', legalName: 'Bengaluru Electronics Pvt Ltd', contactName: 'Divya Rao', prefix: 'BE-' },
-  { state: '27', pan: 'AAHCN9900Q', legalName: 'Nashik Agro Inputs', contactName: null, prefix: 'NAI/' },
-  { state: '06', pan: 'AAICG2211T', legalName: 'Gurgaon Freight Movers', contactName: 'Amit Yadav', prefix: 'GFM' },
-  { state: '27', pan: 'AAJCM6677U', legalName: 'Mumbai Office Supplies', contactName: 'Fatima Shaikh', prefix: 'MOS-' },
-  { state: '19', pan: 'AAKCK8899V', legalName: 'Kolkata Jute Mills', contactName: 'Sourav Das', prefix: 'KJM/' },
-  { state: '27', pan: 'AALCT1100W', legalName: 'Thane Tooling Works', contactName: 'Vikram Joshi', prefix: 'TTW-' },
-  // No email on file: shows the "no contact email" path.
-  { state: '36', pan: 'AAMCH3322X', legalName: 'Hyderabad Chemicals', contactName: null, prefix: 'HC', noEmail: true },
+  { state: '27', pan: 'AAACB9812R', legalName: 'Acme Logistics Pvt Ltd', contactPhone: '+91 98200 10001', contactName: 'Rahul Verma', prefix: 'INV/' },
+  { state: '07', pan: 'AAACC4455K', legalName: 'Cyberdyne Systems LLP', contactPhone: '98110 10002', contactName: 'Meera Iyer', prefix: 'CD-' },
+  { state: '33', pan: 'AAACG1122R', legalName: 'Orion Traders', contactPhone: '09840010003', contactName: 'S. Karthik', prefix: 'OR-' },
+  { state: '27', pan: 'AAFCP7788M', legalName: 'Pune Packaging Co', contactPhone: '+91-98220-10004', contactName: 'Neha Kulkarni', prefix: 'PPC/' },
+  { state: '24', pan: 'AABCS3344L', legalName: 'Surat Textiles Ltd', contactPhone: '919825010005', contactName: 'Hardik Patel', prefix: 'ST' },
+  { state: '29', pan: 'AAGCB5566P', legalName: 'Bengaluru Electronics Pvt Ltd', contactPhone: '98450 10006', contactName: 'Divya Rao', prefix: 'BE-' },
+  { state: '27', pan: 'AAHCN9900Q', legalName: 'Nashik Agro Inputs', contactPhone: '022 2345 6789', contactName: null, prefix: 'NAI/' },
+  { state: '06', pan: 'AAICG2211T', legalName: 'Gurgaon Freight Movers', contactPhone: '98100 10008', contactName: 'Amit Yadav', prefix: 'GFM' },
+  { state: '27', pan: 'AAJCM6677U', legalName: 'Mumbai Office Supplies', contactPhone: '98200 10009', contactName: 'Fatima Shaikh', prefix: 'MOS-' },
+  { state: '19', pan: 'AAKCK8899V', legalName: 'Kolkata Jute Mills', contactPhone: '98300 10010', contactName: 'Sourav Das', prefix: 'KJM/' },
+  { state: '27', pan: 'AALCT1100W', legalName: 'Thane Tooling Works', contactPhone: '+91 99200 10011', contactName: 'Vikram Joshi', prefix: 'TTW-' },
+  // No email or phone on file: shows the skip paths. Nashik has a landline (not WhatsApp-capable).
+  { state: '36', pan: 'AAMCH3322X', legalName: 'Hyderabad Chemicals', contactPhone: null, contactName: null, prefix: 'HC', noEmail: true },
 ].map((v) => ({
   ...v,
   gstin: gstinFor(v.state, v.pan),
@@ -117,7 +117,7 @@ export async function seedDemoOrganization(db: Db, financialYear = '2025-2026') 
   for (const v of DEMO_VENDORS) {
     await db
       .update(schema.vendors)
-      .set({ legalName: v.legalName, contactName: v.contactName, contactEmail: v.contactEmail })
+      .set({ legalName: v.legalName, contactName: v.contactName, contactEmail: v.contactEmail, contactPhone: v.contactPhone })
       .where(eq(schema.vendors.gstin, v.gstin));
   }
   return { org, ingestion };

@@ -154,11 +154,11 @@ describe('XLSX ingestion', () => {
     const summary = await ingestFile('2b.xlsx', await gstr2bWorkbook(), { source: 'GSTR2B', sink });
 
     expect(summary).toMatchObject({ rowCount: 4, writtenCount: 4, errorCount: 0 });
-    // ExcelJS-written workbooks put sheets before workbook.xml, so names fall back to Sheet<n>.
-    expect(summary.skippedSheets).toHaveLength(2); // Read me (no header) + B2BA (ambiguous)
-    expect(summary.warnings.map((w) => w.message).join('\n')).toMatch(/several columns match invoiceNumber/);
+    expect(summary.skippedSheets.sort()).toEqual(['B2BA', 'Read me']);
+    expect(summary.warnings.map((w) => w.message).join('\n')).toMatch(/amendment sheet/);
     const [inv1, orion, inv2, cn] = rows();
     expect(inv1).toMatchObject({
+      sheet: 'B2B',
       rowNumber: 5,
       rawInvoiceNumber: 'INV-1',
       taxableValue: 100_000,
@@ -168,8 +168,34 @@ describe('XLSX ingestion', () => {
     });
     expect(orion).toMatchObject({ rawInvoiceNumber: 'OR-12', invoiceDate: '2025-08-12', itcAvailable: false });
     expect(inv2.taxableValue).toBe(1_000);
-    expect(cn).toMatchObject({ documentType: 'CREDIT_NOTE', returnPeriod: '08-2025' });
-    expect(cn.sheet).not.toBe(inv1.sheet);
+    expect(cn).toMatchObject({ sheet: 'B2B-CDNR', documentType: 'CREDIT_NOTE', returnPeriod: '08-2025' });
+  });
+
+  it('reads every sheet of an ExcelJS-written workbook, every time', async () => {
+    // Regression: the streaming reader returned only the first sheet for most parses.
+    const book = await gstr2bWorkbook();
+    for (let i = 0; i < 20; i++) {
+      const { sink, rows } = memorySink();
+      await ingestFile('2b.xlsx', book, { source: 'GSTR2B', sink });
+      expect(rows().map((r) => r.sheet)).toEqual(['B2B', 'B2B', 'B2B', 'B2B-CDNR']);
+    }
+  });
+
+  it('flags ambiguous amendment-style sheets even under another name', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Amended invoices');
+    ws.addRow(['Invoice number', 'Invoice Date', 'GSTIN of supplier', 'Invoice number', 'Invoice Date', 'Taxable Value (₹)']);
+    ws.addRow(['INV-9', '01-08-2025', ACME, 'INV-9A', '01-08-2025', 1]);
+    const { sink } = memorySink();
+    await expect(ingestFile('a.xlsx', Buffer.from(await wb.xlsx.writeBuffer()), { source: 'GSTR2B', sink })).rejects.toThrow(
+      /No invoice rows found\. .*Skipped Amended invoices: several columns match invoiceNumber/,
+    );
+  });
+
+  it('rejects oversized and corrupt workbooks with a clear message', async () => {
+    const { sink } = memorySink();
+    await expect(ingestFile('big.xlsx', Buffer.alloc(21 * 1024 * 1024), { source: 'GSTR2B', sink })).rejects.toThrow(/larger than 20 MB; export it as CSV/);
+    await expect(ingestFile('bad.xlsx', 'not a zip', { source: 'GSTR2B', sink })).rejects.toThrow(/Not a readable \.xlsx/);
   });
 });
 

@@ -1,4 +1,4 @@
-import { aliasedTable, and, eq, gt, inArray } from 'drizzle-orm';
+import { aliasedTable, and, eq, gt, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import * as schema from '../../db/schema';
 import { toEpochDay } from '../gst/fiscal';
@@ -61,7 +61,7 @@ export interface CommHistory {
  * Next stage due for a vendor, or null. Escalation is measured from when stage 0 was
  * sent; a vendor reply (RESPONDED) stops it.
  */
-export function nextDueStage(history: CommHistory[], now: Date): DunningStage | null {
+export function nextDueStage(history: CommHistory[], now: Date, force = false): DunningStage | null {
   if (history.some((h) => h.status === 'RESPONDED')) return null;
   const sent = history.filter((h) => h.sentAt && h.status !== 'FAILED' && h.status !== 'QUEUED');
   if (!sent.length) return 0;
@@ -69,7 +69,7 @@ export function nextDueStage(history: CommHistory[], now: Date): DunningStage | 
   const next = Math.max(...sent.map((h) => h.stage)) + 1;
   const step = CADENCE.find((c) => c.stage === next);
   if (!step) return null;
-  return now.getTime() - first.getTime() >= step.afterDays * DAY_MS ? step.stage : null;
+  return force || now.getTime() - first.getTime() >= step.afterDays * DAY_MS ? step.stage : null;
 }
 
 export interface VendorNotice {
@@ -92,7 +92,8 @@ export async function loadVendorNotices(
   const rows = await db
     .select({
       matchResultId: mr.id,
-      status: mr.matchStatus,
+      // Manual overrides win: a result marked resolved by finance is never dunned.
+      status: sql<MatchStatus>`coalesce(${mr.overrideStatus}, ${mr.matchStatus})`,
       itcAtRisk: mr.itcAtRisk,
       deadline: mr.section164Deadline,
       vendorId: schema.vendors.id,
@@ -119,7 +120,7 @@ export async function loadVendorNotices(
         eq(mr.reconciliationRunId, input.runId),
         eq(mr.isItcLapsed, false),
         gt(mr.itcAtRisk, 0),
-        inArray(mr.matchStatus, [...ACTIONABLE]),
+        inArray(sql`coalesce(${mr.overrideStatus}, ${mr.matchStatus})`, [...ACTIONABLE]),
       ),
     )
     .orderBy(mr.section164Deadline, pr.invoiceDate);
@@ -170,6 +171,10 @@ export interface DispatchOptions {
   /** WhatsApp channel; omit to disable it. */
   whatsapp?: WhatsAppTransport;
   threshold?: number;
+  /** Only these vendors (one-click reminders from the UI). */
+  vendorIds?: string[];
+  /** Send the next stage now instead of waiting for T+5 / T+10. */
+  force?: boolean;
   now?: Date;
   /** Render and report without sending or writing anything. */
   dryRun?: boolean;
@@ -221,7 +226,9 @@ export async function dispatchDunning(db: Db, options: DispatchOptions): Promise
       )
   ).map((u) => u.email);
 
-  const notices = await loadVendorNotices(db, { organizationId: options.organizationId, runId: options.runId, threshold: options.threshold });
+  const notices = (await loadVendorNotices(db, { organizationId: options.organizationId, runId: options.runId, threshold: options.threshold })).filter(
+    (n) => !options.vendorIds || options.vendorIds.includes(n.vendorId),
+  );
   const comms = schema.vendorCommunications;
   const windowStart = new Date(now.getTime() - CAMPAIGN_WINDOW_DAYS * DAY_MS);
 
@@ -275,7 +282,7 @@ export async function dispatchDunning(db: Db, options: DispatchOptions): Promise
       }
 
       const history = allHistory.filter((h) => h.channel === channel);
-      const stage = nextDueStage(history, now);
+      const stage = nextDueStage(history, now, options.force);
       if (stage === null) {
         const reason = history.some((h) => h.stage === 2 && h.sentAt) ? 'escalation complete' : 'next stage not due yet';
         report.skipped.push({ channel, vendorGstin: gstin, reason });

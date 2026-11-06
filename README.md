@@ -15,7 +15,8 @@ Stack: Next.js 15 (App Router) · React 19 · Tailwind v4 · Drizzle ORM · Neon
 | Day 5 — 16(4) classifier & vendor aggregation | Done (`engine.ts`, `aggregate.ts`, `service.ts` saves runs) |
 | Day 6 — mock GSP & email dunning | Done (`src/lib/gsp/`, `src/lib/notifications/`, `src/lib/dunning/`). Email goes to Mailpit; no external APIs until after MVP. |
 | Day 7 — WhatsApp & delivery webhooks | Done (`src/lib/notifications/whatsapp/`, `src/app/api/webhooks/whatsapp/route.ts`). Mirrored into Mailpit; no provider until after MVP. |
-| Day 8 — REST API route handlers & exports | Next |
+| Day 8 — REST API & exports | Done (`src/app/api/`, services in `src/lib/api/`) |
+| Day 9 — Upload screen with column mapping | Next |
 
 ## Quick start (no accounts needed)
 
@@ -67,6 +68,26 @@ See [docs/SPEC-CHANGES.md](docs/SPEC-CHANGES.md) for where and why this departs 
 - **Webhook:** `/api/webhooks/whatsapp` answers Meta's GET verification handshake. POST checks `X-Hub-Signature-256` (required in production) and applies delivery receipts in order. Statuses never move backwards (SENT → DELIVERED → READ), and a failure reported after delivery is ignored.
 - **Replies:** a reply quoting our message, or a free-text reply from the same number, marks it RESPONDED. That stops escalation on email and WhatsApp for that vendor.
 - **Demo:** `pnpm demo` simulates delivery and read receipts plus one vendor reply through the same processing code (`--no-simulate` skips this).
+
+## API
+
+Errors come back as JSON `{ error, details? }`: 400 for validation, 404, 409, and 422 for an unusable upload. There is no login until Day 13. Outside production, `AUTH_MODE=dev` takes the organization from the `x-organization-id` header, or uses the only one. In production the API refuses requests until authentication is configured.
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/ingestion` | Multipart upload: `file`, `source` (`PURCHASE_REGISTER` or `GSTR2B`), optional `mapping` JSON. Returns row errors and the column mapping used. |
+| `POST /api/gstr2b/sync` | `{ financialYear }` or `{ returnPeriod: "MM-YYYY" }` from the (mock) GSP |
+| `POST /api/reconciliation/run` | `{ financialYear, asOf?, options? }` runs and stores a reconciliation |
+| `GET /api/reconciliation/runs` | Recent runs |
+| `GET /api/reconciliation/:id` | Run totals and breakdown by status |
+| `GET /api/reconciliation/:id/results` | Paginated results. Filters: `status` (comma list), `risk164`, `lapsed`, `overridden`, `vendorId`, `q`, `minAtRisk`. Sorting: `sort` (`-itcAtRisk`, `invoiceDate`, `vendor`, `status`, `deadline`). Paging: `page`, `pageSize` (up to 500). Totals cover every row matching the filters. |
+| `GET /api/reconciliation/:id/export?format=csv` or `xlsx` | Streams the same filtered results as CSV (UTF-8 with BOM) or Excel |
+| `PATCH /api/reconciliation/results/:resultId` | `{ status or null, note }`: manual override with an audit note. Marking a result resolved clears its ITC at risk and stops reminders for it. |
+| `GET /api/vendors/ledger` | Vendors ranked by recoverable ITC at risk, with compliance score, Section 16(4) exposure and the last message per channel |
+| `POST /api/communications/dispatch` | `{ runId?, channels?, vendorIds?, force?, dryRun? }`. `vendorIds` with `force` is the one-click "remind now" |
+| `GET /api/communications` | Message history with delivered, read and reply times |
+| `GET /api/vendor/statement/:token` | Public statement behind the vendor link (no internal ids, never cached) |
+| `GET`/`POST /api/webhooks/whatsapp` | Meta's verification handshake, then delivery and reply webhooks |
 
 ## Scripts
 

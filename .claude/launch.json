@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gst-itc",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["start"],
+      "env": { "AUTH_MODE": "dev", "EMAIL_TRANSPORT": "memory", "WHATSAPP_TRANSPORT": "memory" },
+      "port": 3000
+    }
+  ]
+}

@@ -58,6 +58,15 @@ The vendor tier is the higher of the tier above and an amount-based tier: ≥ �
 - **No provider before MVP.** Messages are mirrored into Mailpit. The raw statement token is kept out of the stored audit copy of each request.
 - **Reply matching is not yet per tenant.** Vendor replies are matched by message id, or else by the latest message sent to that number. A per-organization WhatsApp number mapping comes with the real provider.
 
+## API (Day 8)
+
+- **Extra endpoints beyond the spec's four.** Upload, GSTR-2B sync, run list and detail, manual override, message history, and the public vendor statement were added, because Days 9–11 need them.
+- **Overrides sit next to the engine's result.** A finance user's override is stored alongside the engine's status and never replaces it. Results, totals, the vendor ledger, reminders and the vendor statement all use the overridden status, and marking a result resolved clears its ITC at risk.
+- **Reminder threshold counts only fixable issues.** Only issues the vendor can fix count towards the ₹5,000 threshold, so ITC that 2B marks ineligible does not trigger reminders.
+- **One-click reminders.** `vendorIds` together with `force` sends the next stage immediately and ignores the threshold. Requested vendors with nothing open are reported back.
+- **Direct uploads up to 50 MB.** These work locally and on self-hosted servers. On Vercel, files must go to blob storage first, because functions accept only about 4.5 MB per request.
+- **No login yet.** Outside production the organization comes from a request header, and production refuses API calls until authentication is added on Day 13.
+
 ## Still open (roadmap items, not done yet)
 
 - GSP access for live GSTR-2B needs a licensed GSP/ASP agreement, so it stays mocked for now.

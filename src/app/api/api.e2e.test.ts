@@ -6,6 +6,7 @@ import { DEMO_ORG, DEMO_USERS, DEMO_VENDORS, samplePurchaseRegisterCsv } from '@
 import { createStatementToken } from '@/lib/notifications/tokens';
 
 import * as ingestion from './ingestion/route';
+import * as preview from './ingestion/preview/route';
 import * as sync from './gstr2b/sync/route';
 import * as runRoute from './reconciliation/run/route';
 import * as runsRoute from './reconciliation/runs/route';
@@ -123,6 +124,38 @@ describe('ingestion → sync → run', () => {
     expect(one.data.run.breakdown.find((b: { status: string }) => b.status === 'EXACT_MATCH').count).toBeGreaterThan(0);
     expect((await call(runById.GET, '/x', { params: { id: crypto.randomUUID() } })).status).toBe(404);
     expect((await call(runById.GET, '/x', { params: { id: 'nope' } })).status).toBe(400);
+  });
+});
+
+describe('upload screen endpoints', () => {
+  it('previews a file without saving it', async () => {
+    const before = (await call(ingestion.GET, '/api/ingestion')).data.batches.length;
+    const form = new FormData();
+    form.set('file', new File([samplePurchaseRegisterCsv()], 'pr.csv'));
+    form.set('source', 'PURCHASE_REGISTER');
+    const { status, data } = await call(preview.POST, '/api/ingestion/preview', { method: 'POST', body: form });
+    expect(status).toBe(200);
+    expect(data).toMatchObject({ fileName: 'pr.csv', format: 'csv', source: 'PURCHASE_REGISTER' });
+    expect(data.sheets[0]).toMatchObject({ rowCount: DEMO_VENDORS.length * 24, missingRequired: [] });
+    expect(data.sheets[0].mapping.invoiceNumber).toBe('Supplier Invoice No.');
+    expect((await call(ingestion.GET, '/api/ingestion')).data.batches.length).toBe(before);
+  });
+
+  it('returns 422 for unreadable files', async () => {
+    const form = new FormData();
+    form.set('file', new File(['not a zip'], 'broken.xlsx'));
+    form.set('source', 'PURCHASE_REGISTER');
+    const { status, data } = await call(preview.POST, '/api/ingestion/preview', { method: 'POST', body: form });
+    expect(status).toBe(422);
+    expect(data.error).toMatch(/Not a readable \.xlsx/);
+  });
+
+  it('lists recent uploads, newest first', async () => {
+    const { data } = await call(ingestion.GET, '/api/ingestion?source=PURCHASE_REGISTER');
+    expect(data.batches.length).toBeGreaterThanOrEqual(2);
+    expect(data.batches[0]).toMatchObject({ source: 'PURCHASE_REGISTER', fileName: 'purchase-register.csv', status: 'COMPLETED' });
+    expect(data.batches.some((b: { status: string }) => b.status === 'FAILED')).toBe(true);
+    expect((await call(ingestion.GET, '/api/ingestion?source=NOPE')).status).toBe(400);
   });
 });
 

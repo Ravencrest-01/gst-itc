@@ -3,12 +3,41 @@ import type { ReadableStream as NodeWebReadableStream } from 'node:stream/web';
 import { z } from 'zod';
 import { getRequestContext } from '@/lib/api/context';
 import { badRequest, handler, HttpError, json } from '@/lib/api/http';
+import { and, desc, eq } from 'drizzle-orm';
+import * as schema from '@/db/schema';
 import { runIngestionJob } from '@/lib/ingestion/db-sink';
 import { FIELDS } from '@/lib/ingestion/fields';
 import type { ColumnMapping, FieldKey } from '@/lib/ingestion/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** GET ?source=&limit=: recent uploads with their outcome. */
+export const GET = handler(async (request: Request) => {
+  const ctx = await getRequestContext(request);
+  const params = new URL(request.url).searchParams;
+  const source = params.get('source') ? z.enum(['PURCHASE_REGISTER', 'GSTR2B']).parse(params.get('source')) : undefined;
+  const limit = z.coerce.number().int().min(1).max(100).default(20).parse(params.get('limit') ?? undefined);
+  const b = schema.ingestionBatches;
+  const batches = await ctx.db
+    .select({
+      id: b.id,
+      source: b.source,
+      fileName: b.fileName,
+      status: b.status,
+      rowCount: b.rowCount,
+      insertedCount: b.insertedCount,
+      errorCount: b.errorCount,
+      errors: b.errors,
+      createdAt: b.createdAt,
+      completedAt: b.completedAt,
+    })
+    .from(b)
+    .where(and(eq(b.organizationId, ctx.organizationId), source ? eq(b.source, source) : undefined))
+    .orderBy(desc(b.createdAt))
+    .limit(limit);
+  return json({ batches: batches.map((x) => ({ ...x, errors: (x.errors ?? []).slice(0, 5) })) });
+});
 
 /** Upload limit for direct uploads (local/self-hosted). Hosted deployments upload to blob storage. */
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

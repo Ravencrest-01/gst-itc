@@ -16,7 +16,8 @@ Stack: Next.js 15 (App Router) · React 19 · Tailwind v4 · Drizzle ORM · Neon
 | Day 6 — mock GSP & email dunning | Done (`src/lib/gsp/`, `src/lib/notifications/`, `src/lib/dunning/`). Email goes to Mailpit; no external APIs until after MVP. |
 | Day 7 — WhatsApp & delivery webhooks | Done (`src/lib/notifications/whatsapp/`, `src/app/api/webhooks/whatsapp/route.ts`). Mirrored into Mailpit; no provider until after MVP. |
 | Day 8 — REST API & exports | Done (`src/app/api/`, services in `src/lib/api/`) |
-| Day 9 — Upload screen with column mapping | Next |
+| Day 9 — Upload screen with column mapping | Done (`/upload`, `src/components/upload/`) |
+| Day 10 — Reconciliation workbench | Next |
 
 ## Quick start (no accounts needed)
 
@@ -29,6 +30,21 @@ pnpm demo                      # seed → mock GSTR-2B → reconcile → email +
 `pnpm demo --as-of=2026-11-06` fixes the date. Running it again with `--as-of` set 5 and then 10 days later shows the escalation stages. `--dry-run` previews emails without sending. Without Docker, use `EMAIL_TRANSPORT=memory pnpm demo`.
 
 The database defaults to an embedded Postgres in `./.data/pglite`. Set `DATABASE_URL` to a Neon connection string to use Neon instead.
+
+### The app
+
+```bash
+pnpm db:seed    # demo company and a year of purchases (or start from your own upload)
+pnpm dev        # http://localhost:3000
+```
+
+The upload screen (`/upload`) works in four steps:
+1. **Choose and drop a file.** Pick purchase register or GSTR-2B, then drop a CSV, Excel or portal JSON file.
+2. **Check the columns.** The detected columns are shown with sample values, and you can change any mapping. The first rows are re-checked live, so date or GSTIN problems show up before anything is saved.
+3. **Import.** A progress bar runs while the file uploads. Afterwards you see row counts and every rejected row with the reason.
+4. **Reconcile.** Run reconciliation from the same screen. For GSTR-2B you can skip files entirely: "Fetch 12 months" pulls a year from the mock portal.
+
+The embedded database is single-process. Stop `pnpm dev` before running `pnpm demo` or `pnpm db:seed` against the same `.data` folder.
 
 ## GSTR-2B sync (mock GSP)
 
@@ -76,6 +92,8 @@ Errors come back as JSON `{ error, details? }`: 400 for validation, 404, 409, an
 | Method & path | Purpose |
 |---|---|
 | `POST /api/ingestion` | Multipart upload: `file`, `source` (`PURCHASE_REGISTER` or `GSTR2B`), optional `mapping` JSON. Returns row errors and the column mapping used. |
+| `POST /api/ingestion/preview` | Same form fields; reads the file without saving and returns headers, sample rows, row counts, the column mapping and problems in the first rows |
+| `GET /api/ingestion` | Recent uploads with status and error counts (`?source=`, `?limit=`) |
 | `POST /api/gstr2b/sync` | `{ financialYear }` or `{ returnPeriod: "MM-YYYY" }` from the (mock) GSP |
 | `POST /api/reconciliation/run` | `{ financialYear, asOf?, options? }` runs and stores a reconciliation |
 | `GET /api/reconciliation/runs` | Recent runs |

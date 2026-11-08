@@ -192,12 +192,17 @@ describe('results', () => {
     const before = await get('?status=MISSING_IN_2B&pageSize=1');
     const row = before.data.rows[0];
     const patch = (body: unknown) => call(override.PATCH, '/x', { method: 'PATCH', body, params: { resultId: row.id } });
+    const runAtRisk = async () =>
+      (await call(runById.GET, '/x', { params: { id: runId } })).data.run.breakdown.reduce((n: number, b: { itcAtRisk: number }) => n + b.itcAtRisk, 0);
+    const atRiskBefore = await runAtRisk();
 
     expect((await patch({ status: 'EXACT_MATCH', note: 'x' })).status).toBe(400);
     const done = await patch({ status: 'EXACT_MATCH', note: 'Vendor filed late; visible in 2B for Dec 2025' });
     expect(done.status).toBe(200);
     expect(done.data.result).toMatchObject({ status: 'EXACT_MATCH', matchStatus: 'MISSING_IN_2B', itcAtRisk: 0, originalItcAtRisk: row.itcAtRisk });
     expect(done.data.result.notes).toMatch(/MISSING_IN_2B → EXACT_MATCH: Vendor filed late/);
+    // Run summary tiles must reflect the override too (regression).
+    expect(await runAtRisk()).toBeCloseTo(atRiskBefore - row.itcAtRisk, 2);
     expect((await patch({ status: 'EXACT_MATCH', note: 'again please' })).status).toBe(409);
 
     const after = await get('?status=MISSING_IN_2B&pageSize=1');

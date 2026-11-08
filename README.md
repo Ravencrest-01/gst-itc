@@ -17,7 +17,8 @@ Stack: Next.js 15 (App Router) · React 19 · Tailwind v4 · Drizzle ORM · Neon
 | Day 7 — WhatsApp & delivery webhooks | Done (`src/lib/notifications/whatsapp/`, `src/app/api/webhooks/whatsapp/route.ts`). Mirrored into Mailpit; no provider until after MVP. |
 | Day 8 — REST API & exports | Done (`src/app/api/`, services in `src/lib/api/`) |
 | Day 9 — Upload screen with column mapping | Done (`/upload`, `src/components/upload/`) |
-| Day 10 — Reconciliation workbench | Next |
+| Day 10 — Reconciliation workbench | Done (`/reconciliation`, `src/components/reconciliation/`) |
+| Day 11 — Vendor recovery centre | Next |
 
 ## Quick start (no accounts needed)
 
@@ -43,6 +44,16 @@ The upload screen (`/upload`) works in four steps:
 2. **Check the columns.** The detected columns are shown with sample values, and you can change any mapping. The first rows are re-checked live, so date or GSTIN problems show up before anything is saved.
 3. **Import.** A progress bar runs while the file uploads. Afterwards you see row counts and every rejected row with the reason.
 4. **Reconcile.** Run reconciliation from the same screen. For GSTR-2B you can skip files entirely: "Fetch 12 months" pulls a year from the mock portal.
+
+The reconciliation screens (`/reconciliation`) work like this:
+- **Runs list.** Lists every run with its totals; "New run" starts one for a chosen financial year.
+- **Workbench (`/reconciliation/:id`).**
+  - **Summary.** Tiles show invoices reconciled, invoices needing attention, ITC at risk (after manual changes) and credit you can still claim.
+  - **Filtering.** Search by invoice number, GSTIN or vendor; filter with status chips (with counts) or the Section 16(4) risk toggle. Filters and sorting live in the URL, so a view can be bookmarked or shared.
+  - **The table.** It loads 200 rows at a time as you scroll and draws only the visible rows (TanStack Table v9 + TanStack Virtual), so large runs stay fast. Sorting happens on the server (vendor, date, ITC at risk, status, deadline).
+  - **Detail panel.** Click a row to see your books and GSTR-2B side by side with differences highlighted, the engine's reasons, the deadline countdown, and the audit history. You can change the status there with a required reason. Marking an item resolved clears its ITC at risk everywhere and stops reminders for it.
+  - **Reminders.** Select invoices, then "Trigger vendor reminders" sends one message per vendor by email and/or WhatsApp. You can preview first, or escalate to the next stage right away.
+  - **Export.** CSV and Excel downloads use the current filters.
 
 The embedded database is single-process. Stop `pnpm dev` before running `pnpm demo` or `pnpm db:seed` against the same `.data` folder.
 

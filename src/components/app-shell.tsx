@@ -8,7 +8,7 @@ import type { ReactNode } from 'react';
 const NAV = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard, ready: false },
   { href: '/upload', label: 'Upload data', icon: FileUp, ready: true },
-  { href: '/reconciliation', label: 'Reconciliation', icon: ListChecks, ready: false },
+  { href: '/reconciliation', label: 'Reconciliation', icon: ListChecks, ready: true },
   { href: '/vendors', label: 'Vendor recovery', icon: Users, ready: false },
 ];
 

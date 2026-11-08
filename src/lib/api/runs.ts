@@ -2,6 +2,7 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import * as schema from '../../db/schema';
 import { notFound } from './http';
+import { RESOLVED_STATUSES } from './results';
 
 const runs = schema.reconciliationRuns;
 
@@ -23,11 +24,14 @@ export async function getRun(db: Db, organizationId: string, runId: string) {
   if (!run) throw notFound('Reconciliation run');
   const mr = schema.matchResults;
   const effective = sql<string>`coalesce(${mr.overrideStatus}, ${mr.matchStatus})`;
+  // An override to a resolved status clears the exposure, as in the results endpoint.
+  const resolved = sql.join(RESOLVED_STATUSES.map((s) => sql`${s}`), sql`, `);
+  const atRisk = sql`(case when ${mr.overrideStatus} in (${resolved}) then 0 else ${mr.itcAtRisk} end)`;
   const breakdown = await db
     .select({
       status: effective,
       count: sql<number>`count(*)::int`,
-      itcAtRisk: sql<number>`coalesce(sum(${mr.itcAtRisk}) filter (where not ${mr.isItcLapsed}), 0)::float8`,
+      itcAtRisk: sql<number>`coalesce(sum(${atRisk}) filter (where not ${mr.isItcLapsed}), 0)::float8`,
       itcOpportunity: sql<number>`coalesce(sum(${mr.itcOpportunity}) filter (where not ${mr.isItcLapsed}), 0)::float8`,
     })
     .from(mr)
